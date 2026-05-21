@@ -50,6 +50,11 @@
             Background="Black"
             PointerMoved="PlaybackViewer_PointerMoved"
             Visibility="Collapsed">
+            <MediaPlayerElement
+                x:Name="CapturePreviewElement"
+                AreTransportControlsEnabled="False"
+                Stretch="Uniform" />
+
             <Grid
                 x:Name="ConnectingOverlay"
                 HorizontalAlignment="Stretch"
@@ -64,32 +69,6 @@
                     Text="Connecting to Capture Card ..." />
             </Grid>
 
-            <Grid
-                x:Name="SimulatedVideoFrame"
-                Background="Black"
-                Visibility="Collapsed">
-                <Grid Width="420" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <StackPanel Spacing="12">
-                        <Image
-                            Width="72"
-                            Height="72"
-                            HorizontalAlignment="Center"
-                            Source="Assets/app-icon.png"
-                            Stretch="Uniform" />
-                        <TextBlock
-                            HorizontalAlignment="Center"
-                            FontSize="22"
-                            FontWeight="SemiBold"
-                            Foreground="#FFF8FAFC"
-                            Text="Simulated HDMI preview" />
-                        <TextBlock
-                            HorizontalAlignment="Center"
-                            Foreground="#FFB6C2CF"
-                            Text="Playback controls appear when the pointer moves."
-                            TextAlignment="Center" />
-                    </StackPanel>
-                </Grid>
-            </Grid>
         </Grid>
 
         <ScrollViewer
@@ -162,10 +141,7 @@
                                 Width="320"
                                 HorizontalAlignment="Stretch"
                                 PlaceholderText="Select capture device"
-                                SelectedIndex="0">
-                                <ComboBoxItem Content="Demo UVC capture card" />
-                                <ComboBoxItem Content="USB Video Device" />
-                            </ComboBox>
+                                SelectionChanged="DeviceComboBox_SelectionChanged" />
 
                             <TextBlock
                                 Grid.Row="1"
@@ -180,56 +156,13 @@
                                 Grid.Row="1"
                                 Grid.Column="1"
                                 Spacing="6">
-                                <MenuBar Background="Transparent">
-                                    <MenuBarItem x:Name="ResolutionMenu" Title="1920x1080 @ 60p">
-                                        <MenuFlyoutSubItem Text="1920 x 1080">
-                                            <MenuFlyoutSubItem Text="60 FPS">
-                                                <ToggleMenuFlyoutItem
-                                                    x:Name="Mode1080p60Nv12MenuItem"
-                                                    Click="VideoModeMenuItem_Click"
-                                                    IsChecked="True"
-                                                    Tag="1920 x 1080|60 FPS|NV12"
-                                                    Text="NV12" />
-                                                <ToggleMenuFlyoutItem
-                                                    Click="VideoModeMenuItem_Click"
-                                                    Tag="1920 x 1080|60 FPS|MJPEG"
-                                                    Text="MJPEG" />
-                                            </MenuFlyoutSubItem>
-                                            <MenuFlyoutSubItem Text="30 FPS">
-                                                <ToggleMenuFlyoutItem
-                                                    Click="VideoModeMenuItem_Click"
-                                                    Tag="1920 x 1080|30 FPS|NV12"
-                                                    Text="NV12" />
-                                                <ToggleMenuFlyoutItem
-                                                    Click="VideoModeMenuItem_Click"
-                                                    Tag="1920 x 1080|30 FPS|YUY2"
-                                                    Text="YUY2" />
-                                            </MenuFlyoutSubItem>
-                                        </MenuFlyoutSubItem>
-                                        <MenuFlyoutSubItem Text="1280 x 720">
-                                            <MenuFlyoutSubItem Text="60 FPS">
-                                                <ToggleMenuFlyoutItem
-                                                    Click="VideoModeMenuItem_Click"
-                                                    Tag="1280 x 720|60 FPS|NV12"
-                                                    Text="NV12" />
-                                                <ToggleMenuFlyoutItem
-                                                    Click="VideoModeMenuItem_Click"
-                                                    Tag="1280 x 720|60 FPS|MJPEG"
-                                                    Text="MJPEG" />
-                                            </MenuFlyoutSubItem>
-                                            <MenuFlyoutSubItem Text="30 FPS">
-                                                <ToggleMenuFlyoutItem
-                                                    Click="VideoModeMenuItem_Click"
-                                                    Tag="1280 x 720|30 FPS|YUY2"
-                                                    Text="YUY2" />
-                                            </MenuFlyoutSubItem>
-                                        </MenuFlyoutSubItem>
-                                    </MenuBarItem>
+                                <MenuBar x:Name="VideoModeMenuBar" Background="Transparent" IsEnabled="False">
+                                    <MenuBarItem x:Name="ResolutionMenu" Title="No video modes" />
                                 </MenuBar>
                                 <TextBlock
                                     x:Name="SelectedModeText"
                                     Foreground="#CCFFFFFF"
-                                    Text="Selected: 1920 x 1080, 60 FPS, NV12" />
+                                    Text="Connect a capture card to choose a mode." />
                             </StackPanel>
                         </Grid>
 

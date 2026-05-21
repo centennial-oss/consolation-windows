@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.UI;
@@ -14,7 +15,13 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel;
+using Windows.Devices.Enumeration;
 using Windows.Foundation;
+using Windows.Media.Capture;
+using Windows.Media.Capture.Frames;
+using Windows.Media.Core;
+using Windows.Media.MediaProperties;
+using Windows.Media.Playback;
 using Windows.Storage;
 
 namespace Consolation
@@ -28,18 +35,21 @@ namespace Consolation
             Interval = TimeSpan.FromSeconds(3)
         };
 
-        private readonly DispatcherTimer _simulatedConnectionTimer = new()
-        {
-            Interval = TimeSpan.FromSeconds(1.4)
-        };
-
         private readonly JsonSerializerOptions _jsonOptions = new()
         {
             WriteIndented = true
         };
 
         private AppSettings _settings = new();
+        private DeviceWatcher? _deviceWatcher;
+        private MediaCapture? _mediaCapture;
+        private MediaFrameSource? _previewFrameSource;
+        private MediaPlayer? _mediaPlayer;
+        private readonly List<CaptureDeviceOption> _captureDevices = [];
+        private CaptureDeviceOption? _selectedDevice;
+        private VideoModeOption? _selectedVideoMode;
         private bool _isPlaybackActive;
+        private bool _isLoadingDevices;
         private bool _isControlsPointerOver;
         private bool _isDraggingControls;
         private bool _isSettingsDialogOpen;
@@ -47,9 +57,6 @@ namespace Consolation
         private Point _dragPointerOffset;
         private double _previousVolume = 70;
         private TaskCompletionSource? _modalCompletionSource;
-        private string _selectedResolution = "1920 x 1080";
-        private string _selectedFrameRate = "60 FPS";
-        private string _selectedPixelFormat = "NV12";
 
         public MainWindow()
         {
@@ -58,8 +65,7 @@ namespace Consolation
             ExtendsContentIntoTitleBar = true;
             MaximizeWindow();
             _controlsHideTimer.Tick += ControlsHideTimer_Tick;
-            _simulatedConnectionTimer.Tick += SimulatedConnectionTimer_Tick;
-            _ = LoadSettingsAsync();
+            _ = InitializeCaptureDevicesAsync();
         }
 
         private async Task LoadSettingsAsync()
@@ -70,6 +76,7 @@ namespace Consolation
                 string json = await FileIO.ReadTextAsync(file);
                 _settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
                 _settings.VideoStatsPosition ??= "BottomLeft";
+                _settings.DeviceVideoModes ??= [];
             }
             catch (FileNotFoundException)
             {
@@ -91,6 +98,284 @@ namespace Consolation
             await FileIO.WriteTextAsync(file, json);
         }
 
+        private async Task InitializeCaptureDevicesAsync()
+        {
+            await LoadSettingsAsync();
+            await RefreshCaptureDevicesAsync();
+            StartDeviceWatcher();
+        }
+
+        private async Task RefreshCaptureDevicesAsync()
+        {
+            _isLoadingDevices = true;
+            string? previouslySelectedDeviceId = _selectedDevice?.Id;
+
+            DeviceComboBox.Items.Clear();
+            _captureDevices.Clear();
+            _selectedDevice = null;
+            _selectedVideoMode = null;
+            ResolutionMenu.Items.Clear();
+
+            DeviceInformationCollection devices = await DeviceInformation.FindAllAsync(DeviceClass.VideoCapture);
+            foreach (DeviceInformation device in devices.OrderBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase))
+            {
+                CaptureDeviceOption? option = await TryCreateCaptureDeviceOptionAsync(device);
+                if (option is null || option.VideoModes.Count == 0)
+                {
+                    continue;
+                }
+
+                _captureDevices.Add(option);
+                DeviceComboBox.Items.Add(option.Name);
+            }
+
+            if (_captureDevices.Count == 0)
+            {
+                DeviceComboBox.Items.Add("No Capture Cards found");
+                DeviceComboBox.SelectedIndex = 0;
+                DeviceComboBox.IsEnabled = false;
+                VideoModeMenuBar.IsEnabled = false;
+                ResolutionMenu.Title = "No video modes";
+                SelectedModeText.Text = "Connect a capture card to choose a mode.";
+                PlayButton.IsEnabled = false;
+                _isLoadingDevices = false;
+                return;
+            }
+
+            DeviceComboBox.IsEnabled = true;
+            int preferredDeviceIndex = 0;
+            if (previouslySelectedDeviceId is not null)
+            {
+                int existingDeviceIndex = _captureDevices.FindIndex(device => device.Id == previouslySelectedDeviceId);
+                preferredDeviceIndex = Math.Max(0, existingDeviceIndex);
+            }
+
+            DeviceComboBox.SelectedIndex = preferredDeviceIndex;
+            _isLoadingDevices = false;
+            await SelectDeviceAsync(_captureDevices[preferredDeviceIndex]);
+        }
+
+        private static async Task<CaptureDeviceOption?> TryCreateCaptureDeviceOptionAsync(DeviceInformation device)
+        {
+            MediaCapture? probeCapture = null;
+
+            try
+            {
+                probeCapture = new MediaCapture();
+                await probeCapture.InitializeAsync(CreateMediaCaptureSettings(device.Id, MediaCaptureSharingMode.SharedReadOnly));
+
+                IReadOnlyList<IMediaEncodingProperties> previewProperties =
+                    probeCapture.VideoDeviceController.GetAvailableMediaStreamProperties(MediaStreamType.VideoPreview);
+
+                List<VideoModeOption> videoModes = previewProperties
+                    .OfType<VideoEncodingProperties>()
+                    .Where(properties => properties.Width > 0 && properties.Height > 0 && properties.FrameRate.Denominator > 0)
+                    .Select(VideoModeOption.FromProperties)
+                    .GroupBy(mode => mode.SettingsKey, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.OrderBy(mode => FormatRank(mode.PixelFormat)).First())
+                    .OrderByDescending(mode => mode.Width)
+                    .ThenByDescending(mode => mode.Height)
+                    .ThenByDescending(mode => mode.FrameRate)
+                    .ThenBy(mode => FormatRank(mode.PixelFormat))
+                    .ToList();
+
+                return new CaptureDeviceOption(device.Id, device.Name, videoModes);
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                probeCapture?.Dispose();
+            }
+        }
+
+        private static MediaCaptureInitializationSettings CreateMediaCaptureSettings(
+            string deviceId,
+            MediaCaptureSharingMode sharingMode = MediaCaptureSharingMode.ExclusiveControl)
+        {
+            return new MediaCaptureInitializationSettings
+            {
+                VideoDeviceId = deviceId,
+                StreamingCaptureMode = StreamingCaptureMode.Video,
+                SharingMode = sharingMode,
+                MemoryPreference = MediaCaptureMemoryPreference.Auto
+            };
+        }
+
+        private void StartDeviceWatcher()
+        {
+            _deviceWatcher = DeviceInformation.CreateWatcher(DeviceClass.VideoCapture);
+            _deviceWatcher.Added += (_, _) => QueueDeviceRefresh();
+            _deviceWatcher.Removed += (_, update) => QueueDeviceRefresh(update.Id);
+            _deviceWatcher.Updated += (_, _) => QueueDeviceRefresh();
+            _deviceWatcher.Start();
+        }
+
+        private void QueueDeviceRefresh(string? removedDeviceId = null)
+        {
+            _ = DispatcherQueue.TryEnqueue(async () =>
+            {
+                if (_isPlaybackActive)
+                {
+                    if (removedDeviceId == _selectedDevice?.Id)
+                    {
+                        await StopPlaybackAsync();
+                    }
+                    else
+                    {
+                        return;
+                    }
+                }
+
+                await RefreshCaptureDevicesAsync();
+            });
+        }
+
+        private async Task SelectDeviceAsync(CaptureDeviceOption device)
+        {
+            _selectedDevice = device;
+            VideoModeOption? mode = TryGetSavedMode(device) ?? ChooseDefaultMode(device.VideoModes);
+            BuildVideoModeMenu(device.VideoModes, mode);
+            await SelectVideoModeAsync(mode, saveSelection: false);
+        }
+
+        private VideoModeOption? TryGetSavedMode(CaptureDeviceOption device)
+        {
+            if (!_settings.DeviceVideoModes.TryGetValue(device.Id, out SavedVideoMode? savedMode))
+            {
+                return null;
+            }
+
+            return device.VideoModes.FirstOrDefault(mode =>
+                mode.Width == savedMode.Width &&
+                mode.Height == savedMode.Height &&
+                Math.Abs(mode.FrameRate - savedMode.FrameRate) < 0.01 &&
+                string.Equals(mode.PixelFormat, savedMode.PixelFormat, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static VideoModeOption? ChooseDefaultMode(IReadOnlyList<VideoModeOption> modes)
+        {
+            VideoModeOption? preferred1080p = ChooseBestFormat(modes.Where(mode => mode.Width == 1920 && mode.Height == 1080 && IsSixtyFps(mode)));
+            if (preferred1080p is not null)
+            {
+                return preferred1080p;
+            }
+
+            VideoModeOption? preferred720p = ChooseBestFormat(modes.Where(mode => mode.Width == 1280 && mode.Height == 720 && IsSixtyFps(mode)));
+            if (preferred720p is not null)
+            {
+                return preferred720p;
+            }
+
+            VideoModeOption? highestResolution60p = ChooseBestFormat(modes
+                .Where(IsSixtyFps)
+                .OrderByDescending(mode => mode.Width * mode.Height)
+                .ThenByDescending(mode => mode.Width));
+            if (highestResolution60p is not null)
+            {
+                return highestResolution60p;
+            }
+
+            double highestFrameRate = modes.Count == 0 ? 0 : modes.Max(mode => mode.FrameRate);
+            return ChooseBestFormat(modes
+                .Where(mode => Math.Abs(mode.FrameRate - highestFrameRate) < 0.01)
+                .OrderByDescending(mode => mode.Width * mode.Height)
+                .ThenByDescending(mode => mode.Width));
+        }
+
+        private static VideoModeOption? ChooseBestFormat(IEnumerable<VideoModeOption> modes)
+        {
+            return modes
+                .OrderBy(mode => FormatRank(mode.PixelFormat))
+                .ThenByDescending(mode => mode.Width * mode.Height)
+                .ThenByDescending(mode => mode.FrameRate)
+                .FirstOrDefault();
+        }
+
+        private static bool IsSixtyFps(VideoModeOption mode)
+        {
+            return Math.Abs(mode.FrameRate - 60) < 0.75;
+        }
+
+        private static int FormatRank(string pixelFormat)
+        {
+            string normalized = NormalizePixelFormat(pixelFormat);
+            return normalized switch
+            {
+                "YUY2" or "YUYV" => 0,
+                "NV12" => 1,
+                "UYVY" => 2,
+                "RGB24" or "RGB32" or "ARGB32" or "BGRA8" => 3,
+                "MJPEG" or "MJPG" => 20,
+                _ => 10
+            };
+        }
+
+        private void BuildVideoModeMenu(IReadOnlyList<VideoModeOption> modes, VideoModeOption? selectedMode)
+        {
+            ResolutionMenu.Items.Clear();
+
+            foreach (IGrouping<string, VideoModeOption> resolutionGroup in modes.GroupBy(mode => mode.ResolutionLabel))
+            {
+                MenuFlyoutSubItem resolutionItem = new()
+                {
+                    Text = resolutionGroup.Key
+                };
+
+                foreach (IGrouping<string, VideoModeOption> frameRateGroup in resolutionGroup.GroupBy(mode => mode.FrameRateLabel))
+                {
+                    MenuFlyoutSubItem frameRateItem = new()
+                    {
+                        Text = frameRateGroup.Key
+                    };
+
+                    foreach (VideoModeOption mode in frameRateGroup.OrderBy(mode => FormatRank(mode.PixelFormat)))
+                    {
+                        ToggleMenuFlyoutItem formatItem = new()
+                        {
+                            Text = NormalizePixelFormat(mode.PixelFormat),
+                            Tag = mode,
+                            IsChecked = selectedMode?.SettingsKey == mode.SettingsKey
+                        };
+                        formatItem.Click += VideoModeMenuItem_Click;
+                        frameRateItem.Items.Add(formatItem);
+                    }
+
+                    resolutionItem.Items.Add(frameRateItem);
+                }
+
+                ResolutionMenu.Items.Add(resolutionItem);
+            }
+
+            VideoModeMenuBar.IsEnabled = modes.Count > 0;
+            PlayButton.IsEnabled = _selectedDevice is not null && selectedMode is not null;
+        }
+
+        private async Task SelectVideoModeAsync(VideoModeOption? mode, bool saveSelection)
+        {
+            _selectedVideoMode = mode;
+
+            if (mode is null)
+            {
+                ResolutionMenu.Title = "No video modes";
+                SelectedModeText.Text = "No compatible preview modes found.";
+                PlayButton.IsEnabled = false;
+                return;
+            }
+
+            ResolutionMenu.Title = $"{mode.Width}x{mode.Height} @ {mode.FrameRateLabel.Replace(" FPS", "p")}";
+            SelectedModeText.Text = $"Selected: {mode.ResolutionLabel}, {mode.FrameRateLabel}, {NormalizePixelFormat(mode.PixelFormat)}";
+            PlayButton.IsEnabled = _selectedDevice is not null;
+
+            if (saveSelection && _selectedDevice is not null)
+            {
+                _settings.DeviceVideoModes[_selectedDevice.Id] = SavedVideoMode.FromMode(mode);
+                await SaveSettingsAsync();
+            }
+        }
+
         private void MaximizeWindow()
         {
             IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -101,40 +386,182 @@ namespace Consolation
             }
         }
 
-        private void PlayButton_Click(object sender, RoutedEventArgs e)
+        private async void PlayButton_Click(object sender, RoutedEventArgs e)
         {
+            if (_selectedDevice is null || _selectedVideoMode is null)
+            {
+                return;
+            }
+
             _isPlaybackActive = true;
             StartupForm.Visibility = Visibility.Collapsed;
             PlaybackViewer.Visibility = Visibility.Visible;
             ConnectingOverlay.Visibility = Visibility.Visible;
-            SimulatedVideoFrame.Visibility = Visibility.Collapsed;
             ControlsLayer.Visibility = Visibility.Visible;
             PositionPlaybackControlsBottomCenter();
             ShowPlaybackControls(restartTimer: true);
-            _simulatedConnectionTimer.Stop();
-            _simulatedConnectionTimer.Start();
+
+            try
+            {
+                _mediaCapture = new MediaCapture();
+                await _mediaCapture.InitializeAsync(CreateMediaCaptureSettings(_selectedDevice.Id));
+
+                (_previewFrameSource, MediaFrameFormat? selectedFormat) = FindPlaybackFrameSource(_mediaCapture, _selectedVideoMode);
+                if (_previewFrameSource is null)
+                {
+                    throw new InvalidOperationException(CreateMissingPlaybackStreamMessage(_mediaCapture));
+                }
+
+                if (selectedFormat is not null)
+                {
+                    await _previewFrameSource.SetFormatAsync(selectedFormat);
+                }
+                else
+                {
+                    await _mediaCapture.VideoDeviceController.SetMediaStreamPropertiesAsync(
+                        _previewFrameSource.Info.MediaStreamType,
+                        _selectedVideoMode.Properties);
+                }
+
+                _mediaPlayer = new MediaPlayer
+                {
+                    AutoPlay = false,
+                    RealTimePlayback = true,
+                    Source = MediaSource.CreateFromMediaFrameSource(_previewFrameSource)
+                };
+                _mediaPlayer.MediaFailed += MediaPlayer_MediaFailed;
+                CapturePreviewElement.SetMediaPlayer(_mediaPlayer);
+                _mediaPlayer.Play();
+                ConnectingOverlay.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex)
+            {
+                await StopPlaybackAsync();
+                await ShowModalAsync(
+                    "Capture Card Error",
+                    new TextBlock
+                    {
+                        Text = $"The selected capture card could not start preview.\n\n{ex.Message}",
+                        TextWrapping = TextWrapping.Wrap
+                    });
+            }
         }
 
-        private void StopPlaybackButton_Click(object sender, RoutedEventArgs e)
+        private static (MediaFrameSource? Source, MediaFrameFormat? Format) FindPlaybackFrameSource(MediaCapture mediaCapture, VideoModeOption mode)
         {
+            List<MediaFrameSource> frameSources = mediaCapture.FrameSources
+                .Where(source => source.Value.Info.MediaStreamType is MediaStreamType.VideoPreview or MediaStreamType.VideoRecord)
+                .Select(source => source.Value)
+                .ToList();
+
+            foreach (MediaFrameSource source in frameSources.OrderBy(SourceRank))
+            {
+                MediaFrameFormat? matchingFormat = FindMatchingFrameFormat(source, mode);
+                if (matchingFormat is not null)
+                {
+                    return (source, matchingFormat);
+                }
+            }
+
+            MediaFrameSource? fallbackSource = frameSources
+                .OrderBy(SourceRank)
+                .FirstOrDefault();
+
+            return (fallbackSource, null);
+        }
+
+        private static int SourceRank(MediaFrameSource source)
+        {
+            int streamRank = source.Info.MediaStreamType == MediaStreamType.VideoPreview ? 0 : 100;
+            return streamRank + SourceKindRank(source.Info.SourceKind);
+        }
+
+        private static int SourceKindRank(MediaFrameSourceKind sourceKind)
+        {
+            return sourceKind switch
+            {
+                MediaFrameSourceKind.Color => 0,
+                MediaFrameSourceKind.Custom => 1,
+                _ => 10
+            };
+        }
+
+        private static string CreateMissingPlaybackStreamMessage(MediaCapture mediaCapture)
+        {
+            if (mediaCapture.FrameSources.Count == 0)
+            {
+                return "The selected device did not expose any Media Foundation frame sources after initialization.";
+            }
+
+            string sources = string.Join(
+                "\n",
+                mediaCapture.FrameSources.Values.Select(source =>
+                    $"{source.Info.Id}: {source.Info.MediaStreamType}, {source.Info.SourceKind}"));
+
+            return $"No usable video stream was exposed by the selected device.\n\nAvailable streams:\n{sources}";
+        }
+
+        private static MediaFrameFormat? FindMatchingFrameFormat(MediaFrameSource frameSource, VideoModeOption mode)
+        {
+            return frameSource.SupportedFormats.FirstOrDefault(format =>
+                format.VideoFormat is not null &&
+                format.VideoFormat.Width == mode.Width &&
+                format.VideoFormat.Height == mode.Height &&
+                Math.Abs(GetFrameRate(format) - mode.FrameRate) < 0.01 &&
+                string.Equals(NormalizePixelFormat(format.Subtype), NormalizePixelFormat(mode.PixelFormat), StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static double GetFrameRate(MediaFrameFormat format)
+        {
+            return format.FrameRate.Denominator == 0
+                ? 0
+                : format.FrameRate.Numerator / (double)format.FrameRate.Denominator;
+        }
+
+        private void MediaPlayer_MediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args)
+        {
+            _ = DispatcherQueue.TryEnqueue(async () =>
+            {
+                await StopPlaybackAsync();
+                await ShowModalAsync(
+                    "Capture Card Error",
+                    new TextBlock
+                    {
+                        Text = $"Preview playback failed.\n\n{args.ErrorMessage}",
+                        TextWrapping = TextWrapping.Wrap
+                    });
+            });
+        }
+
+        private async void StopPlaybackButton_Click(object sender, RoutedEventArgs e)
+        {
+            await StopPlaybackAsync();
+        }
+
+        private async Task StopPlaybackAsync()
+        {
+            MediaPlayer? player = _mediaPlayer;
+            MediaCapture? capture = _mediaCapture;
+            _mediaPlayer = null;
+            _mediaCapture = null;
+            _previewFrameSource = null;
+
+            if (player is not null)
+            {
+                player.MediaFailed -= MediaPlayer_MediaFailed;
+                player.Pause();
+                CapturePreviewElement.SetMediaPlayer(null);
+                player.Dispose();
+            }
+
+            capture?.Dispose();
+
             _isPlaybackActive = false;
-            _simulatedConnectionTimer.Stop();
             _controlsHideTimer.Stop();
             ControlsLayer.Visibility = Visibility.Collapsed;
             PlaybackControlsBar.Visibility = Visibility.Visible;
             PlaybackViewer.Visibility = Visibility.Collapsed;
             StartupForm.Visibility = Visibility.Visible;
-        }
-
-        private void SimulatedConnectionTimer_Tick(object? sender, object e)
-        {
-            _simulatedConnectionTimer.Stop();
-
-            if (_isPlaybackActive)
-            {
-                ConnectingOverlay.Visibility = Visibility.Collapsed;
-                SimulatedVideoFrame.Visibility = Visibility.Visible;
-            }
         }
 
         private void PlaybackViewer_PointerMoved(object sender, PointerRoutedEventArgs e)
@@ -300,25 +727,26 @@ namespace Consolation
             VolumeButtonIcon.Glyph = _isMuted ? "\uE74F" : "\uE767";
         }
 
-        private void VideoModeMenuItem_Click(object sender, RoutedEventArgs e)
+        private async void DeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (sender is not ToggleMenuFlyoutItem selectedItem || selectedItem.Tag is not string tag)
+            if (_isLoadingDevices || DeviceComboBox.SelectedIndex < 0 || DeviceComboBox.SelectedIndex >= _captureDevices.Count)
+            {
+                return;
+            }
+
+            await SelectDeviceAsync(_captureDevices[DeviceComboBox.SelectedIndex]);
+        }
+
+        private async void VideoModeMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not ToggleMenuFlyoutItem selectedItem || selectedItem.Tag is not VideoModeOption mode)
             {
                 return;
             }
 
             UncheckVideoModeItems(ResolutionMenu.Items);
             selectedItem.IsChecked = true;
-
-            string[] modeParts = tag.Split('|');
-            if (modeParts.Length == 3)
-            {
-                _selectedResolution = modeParts[0];
-                _selectedFrameRate = modeParts[1];
-                _selectedPixelFormat = modeParts[2];
-                ResolutionMenu.Title = $"{_selectedResolution.Replace(" x ", "x")} @ {_selectedFrameRate.Replace(" FPS", "p")}";
-                SelectedModeText.Text = $"Selected: {_selectedResolution}, {_selectedFrameRate}, {_selectedPixelFormat}";
-            }
+            await SelectVideoModeAsync(mode, saveSelection: true);
         }
 
         private static void UncheckVideoModeItems(IList<MenuFlyoutItemBase> items)
@@ -399,7 +827,7 @@ namespace Consolation
                         new TextBlock { Text = GetBuildInfo(), TextWrapping = TextWrapping.Wrap },
                         new TextBlock
                         {
-                            Text = "Windows UX prototype. UVC capture support will be wired in a later pass.",
+                            Text = "Uses Windows Media Foundation / UVC preview APIs for capture card detection and playback.",
                             TextWrapping = TextWrapping.Wrap
                         }
                     }
@@ -687,6 +1115,61 @@ namespace Consolation
             }
         }
 
+        private static string NormalizePixelFormat(string pixelFormat)
+        {
+            return pixelFormat.ToUpperInvariant() switch
+            {
+                "MJPG" => "MJPEG",
+                "YUYV" => "YUY2",
+                _ => pixelFormat.ToUpperInvariant()
+            };
+        }
+
+        private sealed record CaptureDeviceOption(string Id, string Name, IReadOnlyList<VideoModeOption> VideoModes);
+
+        private sealed class VideoModeOption
+        {
+            public required VideoEncodingProperties Properties { get; init; }
+            public required uint Width { get; init; }
+            public required uint Height { get; init; }
+            public required double FrameRate { get; init; }
+            public required string PixelFormat { get; init; }
+            public string ResolutionLabel => $"{Width} x {Height}";
+            public string FrameRateLabel => $"{FrameRate:0.##} FPS";
+            public string SettingsKey => $"{Width}x{Height}|{FrameRate:0.###}|{NormalizePixelFormat(PixelFormat)}";
+
+            public static VideoModeOption FromProperties(VideoEncodingProperties properties)
+            {
+                return new VideoModeOption
+                {
+                    Properties = properties,
+                    Width = properties.Width,
+                    Height = properties.Height,
+                    FrameRate = properties.FrameRate.Numerator / (double)properties.FrameRate.Denominator,
+                    PixelFormat = NormalizePixelFormat(properties.Subtype)
+                };
+            }
+        }
+
+        private sealed class SavedVideoMode
+        {
+            public uint Width { get; set; }
+            public uint Height { get; set; }
+            public double FrameRate { get; set; }
+            public string PixelFormat { get; set; } = string.Empty;
+
+            public static SavedVideoMode FromMode(VideoModeOption mode)
+            {
+                return new SavedVideoMode
+                {
+                    Width = mode.Width,
+                    Height = mode.Height,
+                    FrameRate = mode.FrameRate,
+                    PixelFormat = NormalizePixelFormat(mode.PixelFormat)
+                };
+            }
+        }
+
         private sealed class AppSettings
         {
             public string VideoStatsPosition { get; set; } = "BottomLeft";
@@ -695,6 +1178,7 @@ namespace Consolation
             public int RotationDegrees { get; set; }
             public bool FlipHorizontal { get; set; }
             public bool FlipVertical { get; set; }
+            public Dictionary<string, SavedVideoMode> DeviceVideoModes { get; set; } = [];
         }
     }
 }

@@ -12,9 +12,9 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel;
 using Windows.Foundation;
-using Windows.Graphics;
 using Windows.Storage;
 
 namespace Consolation
@@ -28,6 +28,11 @@ namespace Consolation
             Interval = TimeSpan.FromSeconds(3)
         };
 
+        private readonly DispatcherTimer _simulatedConnectionTimer = new()
+        {
+            Interval = TimeSpan.FromSeconds(1.4)
+        };
+
         private readonly JsonSerializerOptions _jsonOptions = new()
         {
             WriteIndented = true
@@ -38,7 +43,10 @@ namespace Consolation
         private bool _isControlsPointerOver;
         private bool _isDraggingControls;
         private bool _isSettingsDialogOpen;
+        private bool _isMuted;
         private Point _dragPointerOffset;
+        private double _previousVolume = 70;
+        private TaskCompletionSource? _modalCompletionSource;
         private string _selectedResolution = "1920 x 1080";
         private string _selectedFrameRate = "60 FPS";
         private string _selectedPixelFormat = "NV12";
@@ -48,8 +56,9 @@ namespace Consolation
             InitializeComponent();
 
             ExtendsContentIntoTitleBar = true;
-            ResizeWindow(1180, 760);
+            MaximizeWindow();
             _controlsHideTimer.Tick += ControlsHideTimer_Tick;
+            _simulatedConnectionTimer.Tick += SimulatedConnectionTimer_Tick;
             _ = LoadSettingsAsync();
         }
 
@@ -60,6 +69,7 @@ namespace Consolation
                 StorageFile file = await ApplicationData.Current.LocalFolder.GetFileAsync(SettingsFileName);
                 string json = await FileIO.ReadTextAsync(file);
                 _settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+                _settings.VideoStatsPosition ??= "BottomLeft";
             }
             catch (FileNotFoundException)
             {
@@ -81,11 +91,14 @@ namespace Consolation
             await FileIO.WriteTextAsync(file, json);
         }
 
-        private void ResizeWindow(int width, int height)
+        private void MaximizeWindow()
         {
             IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
             WindowId windowId = Win32Interop.GetWindowIdFromWindow(windowHandle);
-            AppWindow.GetFromWindowId(windowId)?.Resize(new SizeInt32(width, height));
+            if (AppWindow.GetFromWindowId(windowId)?.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.Maximize();
+            }
         }
 
         private void PlayButton_Click(object sender, RoutedEventArgs e)
@@ -93,18 +106,35 @@ namespace Consolation
             _isPlaybackActive = true;
             StartupForm.Visibility = Visibility.Collapsed;
             PlaybackViewer.Visibility = Visibility.Visible;
+            ConnectingOverlay.Visibility = Visibility.Visible;
+            SimulatedVideoFrame.Visibility = Visibility.Collapsed;
             ControlsLayer.Visibility = Visibility.Visible;
+            PositionPlaybackControlsBottomCenter();
             ShowPlaybackControls(restartTimer: true);
+            _simulatedConnectionTimer.Stop();
+            _simulatedConnectionTimer.Start();
         }
 
         private void StopPlaybackButton_Click(object sender, RoutedEventArgs e)
         {
             _isPlaybackActive = false;
+            _simulatedConnectionTimer.Stop();
             _controlsHideTimer.Stop();
             ControlsLayer.Visibility = Visibility.Collapsed;
             PlaybackControlsBar.Visibility = Visibility.Visible;
             PlaybackViewer.Visibility = Visibility.Collapsed;
             StartupForm.Visibility = Visibility.Visible;
+        }
+
+        private void SimulatedConnectionTimer_Tick(object? sender, object e)
+        {
+            _simulatedConnectionTimer.Stop();
+
+            if (_isPlaybackActive)
+            {
+                ConnectingOverlay.Visibility = Visibility.Collapsed;
+                SimulatedVideoFrame.Visibility = Visibility.Visible;
+            }
         }
 
         private void PlaybackViewer_PointerMoved(object sender, PointerRoutedEventArgs e)
@@ -168,6 +198,35 @@ namespace Consolation
             Canvas.SetTop(PlaybackControlsBar, Math.Clamp(top, 12, maxTop));
         }
 
+        private void ControlsLayer_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (_isPlaybackActive && !_isDraggingControls)
+            {
+                PositionPlaybackControlsBottomCenter();
+            }
+        }
+
+        private void PositionPlaybackControlsBottomCenter()
+        {
+            double barWidth = PlaybackControlsBar.ActualWidth;
+            double barHeight = PlaybackControlsBar.ActualHeight;
+
+            if (barWidth <= 0 || barHeight <= 0 || ControlsLayer.ActualWidth <= 0 || ControlsLayer.ActualHeight <= 0)
+            {
+                PlaybackControlsBar.Loaded += PlaybackControlsBar_Loaded;
+                return;
+            }
+
+            Canvas.SetLeft(PlaybackControlsBar, Math.Max(12, (ControlsLayer.ActualWidth - barWidth) / 2));
+            Canvas.SetTop(PlaybackControlsBar, Math.Max(12, ControlsLayer.ActualHeight - barHeight - 26));
+        }
+
+        private void PlaybackControlsBar_Loaded(object sender, RoutedEventArgs e)
+        {
+            PlaybackControlsBar.Loaded -= PlaybackControlsBar_Loaded;
+            PositionPlaybackControlsBottomCenter();
+        }
+
         private void ShowPlaybackControls(bool restartTimer)
         {
             PlaybackControlsBar.Visibility = Visibility.Visible;
@@ -199,6 +258,48 @@ namespace Consolation
             }
         }
 
+        private void VolumeButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isMuted)
+            {
+                _isMuted = false;
+                VolumeSlider.Value = Math.Max(1, _previousVolume);
+            }
+            else
+            {
+                _previousVolume = VolumeSlider.Value > 0 ? VolumeSlider.Value : _previousVolume;
+                _isMuted = true;
+                VolumeSlider.Value = 0;
+            }
+
+            UpdateVolumeIcon();
+        }
+
+        private void VolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+        {
+            if (VolumeButtonIcon is null)
+            {
+                return;
+            }
+
+            if (e.NewValue > 0)
+            {
+                _previousVolume = e.NewValue;
+                _isMuted = false;
+            }
+            else
+            {
+                _isMuted = true;
+            }
+
+            UpdateVolumeIcon();
+        }
+
+        private void UpdateVolumeIcon()
+        {
+            VolumeButtonIcon.Glyph = _isMuted ? "\uE74F" : "\uE767";
+        }
+
         private void VideoModeMenuItem_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not ToggleMenuFlyoutItem selectedItem || selectedItem.Tag is not string tag)
@@ -215,6 +316,7 @@ namespace Consolation
                 _selectedResolution = modeParts[0];
                 _selectedFrameRate = modeParts[1];
                 _selectedPixelFormat = modeParts[2];
+                ResolutionMenu.Title = $"{_selectedResolution.Replace(" x ", "x")} @ {_selectedFrameRate.Replace(" FPS", "p")}";
                 SelectedModeText.Text = $"Selected: {_selectedResolution}, {_selectedFrameRate}, {_selectedPixelFormat}";
             }
         }
@@ -240,8 +342,7 @@ namespace Consolation
             _controlsHideTimer.Stop();
             ShowPlaybackControls(restartTimer: false);
 
-            ContentDialog dialog = CreateSettingsDialog();
-            await dialog.ShowAsync();
+            await ShowModalAsync("Settings", CreateSettingsContent());
 
             _isSettingsDialogOpen = false;
             StartControlsHideTimer();
@@ -249,7 +350,7 @@ namespace Consolation
 
         private async void HelpButton_Click(object sender, RoutedEventArgs e)
         {
-            ContentDialog dialog = CreateSimpleDialog(
+            await ShowModalAsync(
                 "Help",
                 new StackPanel
                 {
@@ -273,13 +374,11 @@ namespace Consolation
                         }
                     }
                 });
-
-            await dialog.ShowAsync();
         }
 
         private async void AboutButton_Click(object sender, RoutedEventArgs e)
         {
-            ContentDialog dialog = CreateSimpleDialog(
+            await ShowModalAsync(
                 "About Consolation",
                 new StackPanel
                 {
@@ -305,26 +404,49 @@ namespace Consolation
                         }
                     }
                 });
-
-            await dialog.ShowAsync();
         }
 
-        private ContentDialog CreateSettingsDialog()
+        private FrameworkElement CreateSettingsContent()
         {
-            ToggleSwitch statsOverlaySwitch = new()
+            RadioButton statsOffRadio = new()
             {
-                Header = "Video stats overlay",
-                IsOn = _settings.ShowVideoStatsOverlay
+                Content = "Off",
+                GroupName = "VideoStatsPosition",
+                IsChecked = _settings.VideoStatsPosition == "Off"
             };
-            statsOverlaySwitch.Toggled += async (_, _) =>
+            statsOffRadio.Checked += async (_, _) =>
             {
-                _settings.ShowVideoStatsOverlay = statsOverlaySwitch.IsOn;
+                _settings.VideoStatsPosition = "Off";
+                await SaveSettingsAsync();
+            };
+
+            RadioButton statsBottomLeftRadio = new()
+            {
+                Content = "Bottom Left",
+                GroupName = "VideoStatsPosition",
+                IsChecked = _settings.VideoStatsPosition == "BottomLeft"
+            };
+            statsBottomLeftRadio.Checked += async (_, _) =>
+            {
+                _settings.VideoStatsPosition = "BottomLeft";
+                await SaveSettingsAsync();
+            };
+
+            RadioButton statsBottomRightRadio = new()
+            {
+                Content = "Bottom Right",
+                GroupName = "VideoStatsPosition",
+                IsChecked = _settings.VideoStatsPosition == "BottomRight"
+            };
+            statsBottomRightRadio.Checked += async (_, _) =>
+            {
+                _settings.VideoStatsPosition = "BottomRight";
                 await SaveSettingsAsync();
             };
 
             ToggleSwitch lowFpsSwitch = new()
             {
-                Header = "Low-FPS warnings",
+                Header = "Show Low FPS Warnings",
                 IsOn = _settings.ShowLowFpsWarnings
             };
             lowFpsSwitch.Toggled += async (_, _) =>
@@ -333,88 +455,213 @@ namespace Consolation
                 await SaveSettingsAsync();
             };
 
-            ComboBox rotateComboBox = new()
+            ToggleSwitch advancedStatsSwitch = new()
             {
-                Header = "Rotate",
-                Width = 240,
-                SelectedValuePath = "Tag"
+                Header = "Show Advanced Video Stats",
+                IsOn = _settings.ShowAdvancedVideoStats
             };
-            rotateComboBox.Items.Add(new ComboBoxItem { Content = "0 degrees", Tag = 0 });
-            rotateComboBox.Items.Add(new ComboBoxItem { Content = "90 degrees", Tag = 90 });
-            rotateComboBox.Items.Add(new ComboBoxItem { Content = "180 degrees", Tag = 180 });
-            rotateComboBox.Items.Add(new ComboBoxItem { Content = "270 degrees", Tag = 270 });
-            rotateComboBox.SelectedValue = _settings.RotationDegrees;
-            rotateComboBox.SelectionChanged += async (_, _) =>
+            advancedStatsSwitch.Toggled += async (_, _) =>
             {
-                if (rotateComboBox.SelectedValue is int degrees)
-                {
-                    _settings.RotationDegrees = degrees;
-                    await SaveSettingsAsync();
-                }
-            };
-
-            CheckBox flipHorizontalCheckBox = new()
-            {
-                Content = "Flip horizontal",
-                IsChecked = _settings.FlipHorizontal
-            };
-            flipHorizontalCheckBox.Checked += async (_, _) =>
-            {
-                _settings.FlipHorizontal = true;
-                await SaveSettingsAsync();
-            };
-            flipHorizontalCheckBox.Unchecked += async (_, _) =>
-            {
-                _settings.FlipHorizontal = false;
+                _settings.ShowAdvancedVideoStats = advancedStatsSwitch.IsOn;
                 await SaveSettingsAsync();
             };
 
-            CheckBox flipVerticalCheckBox = new()
+            RadioButton rotate0Radio = CreateRotationRadioButton("0 degrees", 0);
+            RadioButton rotate90Radio = CreateRotationRadioButton("90 degrees", 90);
+            RadioButton rotate180Radio = CreateRotationRadioButton("180 degrees", 180);
+            RadioButton rotate270Radio = CreateRotationRadioButton("270 degrees", 270);
+
+            ToggleSwitch flipHorizontalSwitch = new()
             {
-                Content = "Flip vertical",
-                IsChecked = _settings.FlipVertical
+                Header = "Horizontal",
+                IsOn = _settings.FlipHorizontal
             };
-            flipVerticalCheckBox.Checked += async (_, _) =>
+            flipHorizontalSwitch.Toggled += async (_, _) =>
             {
-                _settings.FlipVertical = true;
+                _settings.FlipHorizontal = flipHorizontalSwitch.IsOn;
                 await SaveSettingsAsync();
             };
-            flipVerticalCheckBox.Unchecked += async (_, _) =>
+
+            ToggleSwitch flipVerticalSwitch = new()
             {
-                _settings.FlipVertical = false;
+                Header = "Vertical",
+                IsOn = _settings.FlipVertical
+            };
+            flipVerticalSwitch.Toggled += async (_, _) =>
+            {
+                _settings.FlipVertical = flipVerticalSwitch.IsOn;
                 await SaveSettingsAsync();
             };
 
             StackPanel content = new()
             {
-                Spacing = 16,
+                Width = 680,
+                Spacing = 18,
                 Children =
                 {
-                    statsOverlaySwitch,
-                    lowFpsSwitch,
                     new TextBlock
                     {
-                        Text = "Video transformations",
+                        Text = "Video Telemetry",
                         FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
                     },
-                    rotateComboBox,
-                    flipHorizontalCheckBox,
-                    flipVerticalCheckBox
+                    new Grid
+                    {
+                        ColumnSpacing = 16,
+                        ColumnDefinitions =
+                        {
+                            new ColumnDefinition { Width = new GridLength(150) },
+                            new ColumnDefinition { Width = new GridLength(110) },
+                            new ColumnDefinition { Width = new GridLength(160) },
+                            new ColumnDefinition { Width = new GridLength(170) }
+                        },
+                        Children =
+                        {
+                            new TextBlock
+                            {
+                                Text = "Show Video Stats",
+                                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                                VerticalAlignment = VerticalAlignment.Center
+                            },
+                            WithGridColumn(statsOffRadio, 1),
+                            WithGridColumn(statsBottomLeftRadio, 2),
+                            WithGridColumn(statsBottomRightRadio, 3)
+                        }
+                    },
+                    new Grid
+                    {
+                        ColumnSpacing = 28,
+                        ColumnDefinitions =
+                        {
+                            new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
+                            new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }
+                        },
+                        Children =
+                        {
+                            lowFpsSwitch,
+                            WithGridColumn(advancedStatsSwitch, 1)
+                        }
+                    },
+                    new TextBlock
+                    {
+                        Text = "Video Transformation",
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+                    },
+                    new Grid
+                    {
+                        ColumnSpacing = 16,
+                        ColumnDefinitions =
+                        {
+                            new ColumnDefinition { Width = new GridLength(76) },
+                            new ColumnDefinition { Width = new GridLength(128) },
+                            new ColumnDefinition { Width = new GridLength(128) },
+                            new ColumnDefinition { Width = new GridLength(138) },
+                            new ColumnDefinition { Width = new GridLength(138) }
+                        },
+                        Children =
+                        {
+                            new TextBlock
+                            {
+                                Text = "Rotate",
+                                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                                VerticalAlignment = VerticalAlignment.Center
+                            },
+                            WithGridColumn(rotate0Radio, 1),
+                            WithGridColumn(rotate90Radio, 2),
+                            WithGridColumn(rotate180Radio, 3),
+                            WithGridColumn(rotate270Radio, 4)
+                        }
+                    },
+                    new Grid
+                    {
+                        ColumnSpacing = 28,
+                        ColumnDefinitions =
+                        {
+                            new ColumnDefinition { Width = new GridLength(80) },
+                            new ColumnDefinition { Width = new GridLength(180) },
+                            new ColumnDefinition { Width = new GridLength(180) }
+                        },
+                        Children =
+                        {
+                            new TextBlock
+                            {
+                                Text = "Flip",
+                                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                                VerticalAlignment = VerticalAlignment.Center
+                            },
+                            WithGridColumn(flipHorizontalSwitch, 1),
+                            WithGridColumn(flipVerticalSwitch, 2)
+                        }
+                    }
                 }
             };
 
-            return CreateSimpleDialog("Settings", content);
+            return content;
         }
 
-        private ContentDialog CreateSimpleDialog(string title, object content)
+        private static T WithGridColumn<T>(T element, int column) where T : FrameworkElement
         {
-            return new ContentDialog
+            Grid.SetColumn(element, column);
+            return element;
+        }
+
+        private RadioButton CreateRotationRadioButton(string label, int degrees)
+        {
+            RadioButton radioButton = new()
             {
-                XamlRoot = RootGrid.XamlRoot,
-                Title = title,
-                Content = content,
-                CloseButtonText = "Close",
-                DefaultButton = ContentDialogButton.Close
+                Content = label,
+                GroupName = "RotationDegrees",
+                IsChecked = _settings.RotationDegrees == degrees
+            };
+
+            radioButton.Checked += async (_, _) =>
+            {
+                _settings.RotationDegrees = degrees;
+                await SaveSettingsAsync();
+            };
+
+            return radioButton;
+        }
+
+        private Task ShowModalAsync(string title, FrameworkElement content)
+        {
+            _modalCompletionSource = new TaskCompletionSource();
+            ModalTitleHost.Content = CreateDialogTitle(title);
+            ModalContentHost.Content = content;
+            ModalOverlay.Visibility = Visibility.Visible;
+            return _modalCompletionSource.Task;
+        }
+
+        private void ModalCloseButton_Click(object sender, RoutedEventArgs e)
+        {
+            ModalOverlay.Visibility = Visibility.Collapsed;
+            ModalTitleHost.Content = null;
+            ModalContentHost.Content = null;
+            _modalCompletionSource?.TrySetResult();
+            _modalCompletionSource = null;
+        }
+
+        private static StackPanel CreateDialogTitle(string title)
+        {
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 12,
+                Children =
+                {
+                    new Image
+                    {
+                        Width = 42,
+                        Height = 42,
+                        Source = new BitmapImage(new Uri("ms-appx:///Assets/app-icon.png"))
+                    },
+                    new TextBlock
+                    {
+                        Text = title,
+                        FontSize = 26,
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                }
             };
         }
 
@@ -442,8 +689,9 @@ namespace Consolation
 
         private sealed class AppSettings
         {
-            public bool ShowVideoStatsOverlay { get; set; } = true;
+            public string VideoStatsPosition { get; set; } = "BottomLeft";
             public bool ShowLowFpsWarnings { get; set; } = true;
+            public bool ShowAdvancedVideoStats { get; set; }
             public int RotationDegrees { get; set; }
             public bool FlipHorizontal { get; set; }
             public bool FlipVertical { get; set; }

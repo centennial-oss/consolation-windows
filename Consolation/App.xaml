@@ -10,7 +10,24 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
                 <!-- Other merged dictionaries here -->
             </ResourceDictionary.MergedDictionaries>
-            <!-- Other app resources here -->
+            <Color x:Key="SystemAccentColor">#CC11BB</Color>
+            <Color x:Key="SystemAccentColorLight1">#DD43D0</Color>
+            <Color x:Key="SystemAccentColorLight2">#EA76E0</Color>
+            <Color x:Key="SystemAccentColorLight3">#F5B5EF</Color>
+            <Color x:Key="SystemAccentColorDark1">#A70E99</Color>
+            <Color x:Key="SystemAccentColorDark2">#810B76</Color>
+            <Color x:Key="SystemAccentColorDark3">#5B0752</Color>
+            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#CC11BB" />
+            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#A70E99" />
+            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#810B76" />
+            <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#665B0752" />
+            <SolidColorBrush x:Key="ToggleSwitchFillOnBrush" Color="#CC11BB" />
+            <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOverBrush" Color="#DD43D0" />
+            <SolidColorBrush x:Key="ToggleSwitchFillOnPressedBrush" Color="#A70E99" />
+            <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStroke" Color="#CC11BB" />
+            <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStrokePointerOver" Color="#DD43D0" />
+            <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStrokePressed" Color="#A70E99" />
+            <SolidColorBrush x:Key="RadioButtonCheckGlyphFill" Color="#CC11BB" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -39,7 +39,7 @@ Consolation has been tested by the developers on a Samsung Galaxy Tab S8 Ultra (
 
 ### Running
 
-- Windows 10 machine (Intel or ARM) with a USB port
+- Windows 10 or 11 machine (Intel or ARM) with a USB port
 - A UVC-compliant video capture card
 
 ### Developer

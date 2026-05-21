@@ -53,7 +53,12 @@
             <MediaPlayerElement
                 x:Name="CapturePreviewElement"
                 AreTransportControlsEnabled="False"
-                Stretch="Uniform" />
+                SizeChanged="CapturePreviewElement_SizeChanged"
+                Stretch="Uniform">
+                <MediaPlayerElement.RenderTransform>
+                    <CompositeTransform x:Name="CapturePreviewTransform" />
+                </MediaPlayerElement.RenderTransform>
+            </MediaPlayerElement>
 
             <Grid
                 x:Name="ConnectingOverlay"
@@ -68,6 +73,40 @@
                     Foreground="White"
                     Text="Connecting to Capture Card ..." />
             </Grid>
+
+            <Border
+                x:Name="VideoStatsOverlay"
+                MinWidth="260"
+                Padding="8,4"
+                Margin="20,0,20,18"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Background="#D9000000"
+                Visibility="Collapsed">
+                <TextBlock
+                    x:Name="VideoStatsText"
+                    FontFamily="Consolas"
+                    FontSize="13"
+                    Foreground="White"
+                    Text="Waiting for stats..." />
+            </Border>
+
+            <Button
+                x:Name="LowFpsWarningButton"
+                MinWidth="238"
+                Height="42"
+                Padding="18,0"
+                Margin="20,0,20,18"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Background="#FFC00000"
+                BorderBrush="#99FFFFFF"
+                BorderThickness="1"
+                Click="LowFpsWarningButton_Click"
+                CornerRadius="0"
+                Visibility="Collapsed">
+                <TextBlock Foreground="White" Text="Low FPS detected. Tap for info." />
+            </Button>
 
         </Grid>
 

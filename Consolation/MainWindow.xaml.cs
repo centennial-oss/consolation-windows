@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI;
 using Microsoft.UI.Input;
@@ -17,11 +19,15 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel;
 using Windows.Devices.Enumeration;
 using Windows.Foundation;
+using Windows.Media;
+using Windows.Media.Audio;
 using Windows.Media.Capture;
 using Windows.Media.Capture.Frames;
 using Windows.Media.Core;
+using Windows.Media.Devices;
 using Windows.Media.MediaProperties;
 using Windows.Media.Playback;
+using Windows.Media.Render;
 using Windows.Storage;
 
 namespace Consolation
@@ -29,10 +35,16 @@ namespace Consolation
     public sealed partial class MainWindow : Window
     {
         private const string SettingsFileName = "settings.json";
+        private static readonly string[] DeviceContainerProperties = ["System.Devices.ContainerId"];
 
         private readonly DispatcherTimer _controlsHideTimer = new()
         {
             Interval = TimeSpan.FromSeconds(3)
+        };
+
+        private readonly DispatcherTimer _statsTimer = new()
+        {
+            Interval = TimeSpan.FromSeconds(1)
         };
 
         private readonly JsonSerializerOptions _jsonOptions = new()
@@ -44,7 +56,12 @@ namespace Consolation
         private DeviceWatcher? _deviceWatcher;
         private MediaCapture? _mediaCapture;
         private MediaFrameSource? _previewFrameSource;
+        private MediaFrameFormat? _activeVideoFormat;
+        private MediaFrameReader? _statsFrameReader;
         private MediaPlayer? _mediaPlayer;
+        private AudioGraph? _audioGraph;
+        private AudioDeviceInputNode? _audioInputNode;
+        private AudioDeviceOutputNode? _audioOutputNode;
         private readonly List<CaptureDeviceOption> _captureDevices = [];
         private CaptureDeviceOption? _selectedDevice;
         private VideoModeOption? _selectedVideoMode;
@@ -54,8 +71,12 @@ namespace Consolation
         private bool _isDraggingControls;
         private bool _isSettingsDialogOpen;
         private bool _isMuted;
+        private bool _cursorHidden;
         private Point _dragPointerOffset;
         private double _previousVolume = 70;
+        private long _framesSinceLastStats;
+        private int _lowFpsSeconds;
+        private double _actualFrameRate;
         private TaskCompletionSource? _modalCompletionSource;
 
         public MainWindow()
@@ -65,6 +86,7 @@ namespace Consolation
             ExtendsContentIntoTitleBar = true;
             MaximizeWindow();
             _controlsHideTimer.Tick += ControlsHideTimer_Tick;
+            _statsTimer.Tick += StatsTimer_Tick;
             _ = InitializeCaptureDevicesAsync();
         }
 
@@ -116,7 +138,7 @@ namespace Consolation
             _selectedVideoMode = null;
             ResolutionMenu.Items.Clear();
 
-            DeviceInformationCollection devices = await DeviceInformation.FindAllAsync(DeviceClass.VideoCapture);
+            DeviceInformationCollection devices = await DeviceInformation.FindAllAsync(MediaDevice.GetVideoCaptureSelector(), DeviceContainerProperties);
             foreach (DeviceInformation device in devices.OrderBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase))
             {
                 CaptureDeviceOption? option = await TryCreateCaptureDeviceOptionAsync(device);
@@ -179,7 +201,9 @@ namespace Consolation
                     .ThenBy(mode => FormatRank(mode.PixelFormat))
                     .ToList();
 
-                return new CaptureDeviceOption(device.Id, device.Name, videoModes);
+                string? audioDeviceId = await FindPairedAudioDeviceIdAsync(device);
+
+                return new CaptureDeviceOption(device.Id, device.Name, audioDeviceId, videoModes);
             }
             catch
             {
@@ -189,6 +213,33 @@ namespace Consolation
             {
                 probeCapture?.Dispose();
             }
+        }
+
+        private static async Task<string?> FindPairedAudioDeviceIdAsync(DeviceInformation videoDevice)
+        {
+            Guid? videoContainerId = TryGetContainerId(videoDevice);
+            if (videoContainerId is null)
+            {
+                return null;
+            }
+
+            DeviceInformationCollection audioDevices = await DeviceInformation.FindAllAsync(MediaDevice.GetAudioCaptureSelector(), DeviceContainerProperties);
+            foreach (DeviceInformation audioDevice in audioDevices)
+            {
+                if (TryGetContainerId(audioDevice) == videoContainerId)
+                {
+                    return audioDevice.Id;
+                }
+            }
+
+            return null;
+        }
+
+        private static Guid? TryGetContainerId(DeviceInformation device)
+        {
+            return device.Properties.TryGetValue("System.Devices.ContainerId", out object? containerId) && containerId is Guid guid
+                ? guid
+                : null;
         }
 
         private static MediaCaptureInitializationSettings CreateMediaCaptureSettings(
@@ -400,6 +451,9 @@ namespace Consolation
             ControlsLayer.Visibility = Visibility.Visible;
             PositionPlaybackControlsBottomCenter();
             ShowPlaybackControls(restartTimer: true);
+            ApplyVideoTransform();
+            ApplyStatsOverlayPosition();
+            ResetVideoStats();
 
             try
             {
@@ -415,12 +469,14 @@ namespace Consolation
                 if (selectedFormat is not null)
                 {
                     await _previewFrameSource.SetFormatAsync(selectedFormat);
+                    _activeVideoFormat = selectedFormat;
                 }
                 else
                 {
                     await _mediaCapture.VideoDeviceController.SetMediaStreamPropertiesAsync(
                         _previewFrameSource.Info.MediaStreamType,
                         _selectedVideoMode.Properties);
+                    _activeVideoFormat = FindClosestFrameFormat(_previewFrameSource, _selectedVideoMode);
                 }
 
                 _mediaPlayer = new MediaPlayer
@@ -432,6 +488,8 @@ namespace Consolation
                 _mediaPlayer.MediaFailed += MediaPlayer_MediaFailed;
                 CapturePreviewElement.SetMediaPlayer(_mediaPlayer);
                 _mediaPlayer.Play();
+                await StartStatsReaderAsync();
+                await StartAudioAsync(_selectedDevice.AudioDeviceId);
                 ConnectingOverlay.Visibility = Visibility.Collapsed;
             }
             catch (Exception ex)
@@ -511,11 +569,110 @@ namespace Consolation
                 string.Equals(NormalizePixelFormat(format.Subtype), NormalizePixelFormat(mode.PixelFormat), StringComparison.OrdinalIgnoreCase));
         }
 
+        private static MediaFrameFormat? FindClosestFrameFormat(MediaFrameSource frameSource, VideoModeOption mode)
+        {
+            return frameSource.CurrentFormat ??
+                frameSource.SupportedFormats
+                    .Where(format => format.VideoFormat is not null)
+                    .OrderBy(format => format.VideoFormat.Width == mode.Width && format.VideoFormat.Height == mode.Height ? 0 : 1)
+                    .ThenBy(format => Math.Abs(GetFrameRate(format) - mode.FrameRate))
+                    .ThenBy(format => FormatRank(format.Subtype))
+                    .FirstOrDefault();
+        }
+
         private static double GetFrameRate(MediaFrameFormat format)
         {
             return format.FrameRate.Denominator == 0
                 ? 0
                 : format.FrameRate.Numerator / (double)format.FrameRate.Denominator;
+        }
+
+        private async Task StartStatsReaderAsync()
+        {
+            if (_mediaCapture is null || _previewFrameSource is null)
+            {
+                return;
+            }
+
+            _statsFrameReader = await _mediaCapture.CreateFrameReaderAsync(_previewFrameSource);
+            _statsFrameReader.AcquisitionMode = MediaFrameReaderAcquisitionMode.Realtime;
+            _statsFrameReader.FrameArrived += StatsFrameReader_FrameArrived;
+            await _statsFrameReader.StartAsync();
+            _statsTimer.Start();
+        }
+
+        private void StatsFrameReader_FrameArrived(MediaFrameReader sender, MediaFrameArrivedEventArgs args)
+        {
+            using MediaFrameReference? frame = sender.TryAcquireLatestFrame();
+            if (frame is not null)
+            {
+                Interlocked.Increment(ref _framesSinceLastStats);
+            }
+        }
+
+        private async Task StartAudioAsync(string? audioDeviceId)
+        {
+            if (string.IsNullOrWhiteSpace(audioDeviceId))
+            {
+                return;
+            }
+
+            AudioGraphSettings graphSettings = new(AudioRenderCategory.Media)
+            {
+                QuantumSizeSelectionMode = QuantumSizeSelectionMode.LowestLatency
+            };
+
+            CreateAudioGraphResult graphResult = await AudioGraph.CreateAsync(graphSettings);
+            if (graphResult.Status != AudioGraphCreationStatus.Success)
+            {
+                return;
+            }
+
+            _audioGraph = graphResult.Graph;
+
+            CreateAudioDeviceOutputNodeResult outputResult = await _audioGraph.CreateDeviceOutputNodeAsync();
+            if (outputResult.Status != AudioDeviceNodeCreationStatus.Success)
+            {
+                StopAudio();
+                return;
+            }
+
+            DeviceInformation audioDevice = await DeviceInformation.CreateFromIdAsync(audioDeviceId);
+            CreateAudioDeviceInputNodeResult inputResult = await _audioGraph.CreateDeviceInputNodeAsync(MediaCategory.Media, null, audioDevice);
+            if (inputResult.Status != AudioDeviceNodeCreationStatus.Success)
+            {
+                StopAudio();
+                return;
+            }
+
+            _audioOutputNode = outputResult.DeviceOutputNode;
+            _audioInputNode = inputResult.DeviceInputNode;
+            _audioInputNode.AddOutgoingConnection(_audioOutputNode, GetAudioGain());
+            _audioGraph.Start();
+        }
+
+        private double GetAudioGain()
+        {
+            return _isMuted ? 0 : Math.Clamp(VolumeSlider.Value / 100, 0, 1);
+        }
+
+        private void ApplyAudioGain()
+        {
+            if (_audioInputNode is not null && _audioOutputNode is not null)
+            {
+                _audioInputNode.OutgoingGain = GetAudioGain();
+            }
+        }
+
+        private void StopAudio()
+        {
+            _audioGraph?.Stop();
+            _audioInputNode?.Dispose();
+            _audioOutputNode?.Dispose();
+            _audioGraph?.Dispose();
+            _audioInputNode = null;
+            _audioOutputNode = null;
+            _audioGraph = null;
         }
 
         private void MediaPlayer_MediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args)
@@ -542,9 +699,24 @@ namespace Consolation
         {
             MediaPlayer? player = _mediaPlayer;
             MediaCapture? capture = _mediaCapture;
+            MediaFrameReader? statsReader = _statsFrameReader;
+            _statsFrameReader = null;
             _mediaPlayer = null;
             _mediaCapture = null;
             _previewFrameSource = null;
+            _activeVideoFormat = null;
+            _statsTimer.Stop();
+            LowFpsWarningButton.Visibility = Visibility.Collapsed;
+            VideoStatsOverlay.Visibility = Visibility.Collapsed;
+            ShowMouseCursor();
+            StopAudio();
+
+            if (statsReader is not null)
+            {
+                statsReader.FrameArrived -= StatsFrameReader_FrameArrived;
+                await statsReader.StopAsync();
+                statsReader.Dispose();
+            }
 
             if (player is not null)
             {
@@ -568,6 +740,7 @@ namespace Consolation
         {
             if (_isPlaybackActive)
             {
+                ShowMouseCursor();
                 ShowPlaybackControls(restartTimer: true);
             }
         }
@@ -633,6 +806,11 @@ namespace Consolation
             }
         }
 
+        private void CapturePreviewElement_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            ApplyVideoTransform();
+        }
+
         private void PositionPlaybackControlsBottomCenter()
         {
             double barWidth = PlaybackControlsBar.ActualWidth;
@@ -682,6 +860,7 @@ namespace Consolation
             if (_isPlaybackActive && !_isControlsPointerOver && !_isDraggingControls && !_isSettingsDialogOpen)
             {
                 PlaybackControlsBar.Visibility = Visibility.Collapsed;
+                HideMouseCursor();
             }
         }
 
@@ -700,6 +879,7 @@ namespace Consolation
             }
 
             UpdateVolumeIcon();
+            ApplyAudioGain();
         }
 
         private void VolumeSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
@@ -720,11 +900,120 @@ namespace Consolation
             }
 
             UpdateVolumeIcon();
+            ApplyAudioGain();
         }
 
         private void UpdateVolumeIcon()
         {
             VolumeButtonIcon.Glyph = _isMuted ? "\uE74F" : "\uE767";
+        }
+
+        private void StatsTimer_Tick(object? sender, object e)
+        {
+            long frameCount = Interlocked.Exchange(ref _framesSinceLastStats, 0);
+            _actualFrameRate = frameCount;
+
+            UpdateVideoStatsOverlay();
+            UpdateLowFpsWarning();
+        }
+
+        private void ResetVideoStats()
+        {
+            Interlocked.Exchange(ref _framesSinceLastStats, 0);
+            _actualFrameRate = 0;
+            _lowFpsSeconds = 0;
+            LowFpsWarningButton.Visibility = Visibility.Collapsed;
+            VideoStatsOverlay.Visibility = _settings.VideoStatsPosition == "Off" ? Visibility.Collapsed : Visibility.Visible;
+            UpdateVideoStatsOverlay();
+        }
+
+        private void UpdateVideoStatsOverlay()
+        {
+            if (_settings.VideoStatsPosition == "Off")
+            {
+                VideoStatsOverlay.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            VideoStatsOverlay.Visibility = Visibility.Visible;
+
+            string resolution = _activeVideoFormat?.VideoFormat is not null
+                ? $"{_activeVideoFormat.VideoFormat.Width}x{_activeVideoFormat.VideoFormat.Height}"
+                : _selectedVideoMode is not null ? $"{_selectedVideoMode.Width}x{_selectedVideoMode.Height}" : "Unknown";
+
+            double reportedFrameRate = _activeVideoFormat is not null ? GetFrameRate(_activeVideoFormat) : _selectedVideoMode?.FrameRate ?? 0;
+            string format = _activeVideoFormat is not null ? NormalizePixelFormat(_activeVideoFormat.Subtype) : _selectedVideoMode?.PixelFormat ?? "Unknown";
+            string basic = $"{resolution}/{reportedFrameRate:0.##} | {format} | Fps:{_actualFrameRate:0}";
+
+            VideoStatsText.Text = _settings.ShowAdvancedVideoStats
+                ? $"{basic} | Req:{_selectedVideoMode?.FrameRate:0.##} | Stream:{_previewFrameSource?.Info.MediaStreamType} | Src:{_previewFrameSource?.Info.SourceKind}"
+                : basic;
+        }
+
+        private void UpdateLowFpsWarning()
+        {
+            if (!_settings.ShowLowFpsWarnings || _selectedVideoMode is null)
+            {
+                LowFpsWarningButton.Visibility = Visibility.Collapsed;
+                _lowFpsSeconds = 0;
+                return;
+            }
+
+            if (_selectedVideoMode.FrameRate - _actualFrameRate >= 10)
+            {
+                _lowFpsSeconds++;
+            }
+            else
+            {
+                _lowFpsSeconds = 0;
+            }
+
+            LowFpsWarningButton.Visibility = _lowFpsSeconds >= 3 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void ApplyStatsOverlayPosition()
+        {
+            bool statsRight = _settings.VideoStatsPosition == "BottomRight";
+            VideoStatsOverlay.HorizontalAlignment = statsRight ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+            LowFpsWarningButton.HorizontalAlignment = statsRight ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+            VideoStatsOverlay.Visibility = _settings.VideoStatsPosition == "Off" ? Visibility.Collapsed : VideoStatsOverlay.Visibility;
+        }
+
+        private void ApplyVideoTransform()
+        {
+            CapturePreviewTransform.CenterX = CapturePreviewElement.ActualWidth / 2;
+            CapturePreviewTransform.CenterY = CapturePreviewElement.ActualHeight / 2;
+            CapturePreviewTransform.Rotation = _settings.RotationDegrees;
+            CapturePreviewTransform.ScaleX = _settings.FlipHorizontal ? -1 : 1;
+            CapturePreviewTransform.ScaleY = _settings.FlipVertical ? -1 : 1;
+        }
+
+        private void HideMouseCursor()
+        {
+            if (_cursorHidden)
+            {
+                return;
+            }
+
+            while (ShowCursor(false) >= 0)
+            {
+            }
+
+            _cursorHidden = true;
+        }
+
+        private void ShowMouseCursor()
+        {
+            if (!_cursorHidden)
+            {
+                return;
+            }
+
+            while (ShowCursor(true) < 0)
+            {
+            }
+
+            _cursorHidden = false;
         }
 
         private async void DeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -768,12 +1057,36 @@ namespace Consolation
         {
             _isSettingsDialogOpen = true;
             _controlsHideTimer.Stop();
+            ShowMouseCursor();
             ShowPlaybackControls(restartTimer: false);
 
             await ShowModalAsync("Settings", CreateSettingsContent());
 
             _isSettingsDialogOpen = false;
             StartControlsHideTimer();
+        }
+
+        private async void LowFpsWarningButton_Click(object sender, RoutedEventArgs e)
+        {
+            await ShowModalAsync(
+                "Low FPS",
+                new StackPanel
+                {
+                    Spacing = 12,
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "The capture card is delivering fewer frames than the selected mode requests.",
+                            TextWrapping = TextWrapping.Wrap
+                        },
+                        new TextBlock
+                        {
+                            Text = "For the best results, connect the capture card directly to the PC, avoid USB hubs, use a high-quality cable, and try a lower resolution or frame rate if the warning continues.",
+                            TextWrapping = TextWrapping.Wrap
+                        }
+                    }
+                });
         }
 
         private async void HelpButton_Click(object sender, RoutedEventArgs e)
@@ -845,6 +1158,8 @@ namespace Consolation
             statsOffRadio.Checked += async (_, _) =>
             {
                 _settings.VideoStatsPosition = "Off";
+                ApplyStatsOverlayPosition();
+                UpdateVideoStatsOverlay();
                 await SaveSettingsAsync();
             };
 
@@ -857,6 +1172,8 @@ namespace Consolation
             statsBottomLeftRadio.Checked += async (_, _) =>
             {
                 _settings.VideoStatsPosition = "BottomLeft";
+                ApplyStatsOverlayPosition();
+                UpdateVideoStatsOverlay();
                 await SaveSettingsAsync();
             };
 
@@ -869,6 +1186,8 @@ namespace Consolation
             statsBottomRightRadio.Checked += async (_, _) =>
             {
                 _settings.VideoStatsPosition = "BottomRight";
+                ApplyStatsOverlayPosition();
+                UpdateVideoStatsOverlay();
                 await SaveSettingsAsync();
             };
 
@@ -880,6 +1199,7 @@ namespace Consolation
             lowFpsSwitch.Toggled += async (_, _) =>
             {
                 _settings.ShowLowFpsWarnings = lowFpsSwitch.IsOn;
+                UpdateLowFpsWarning();
                 await SaveSettingsAsync();
             };
 
@@ -891,6 +1211,7 @@ namespace Consolation
             advancedStatsSwitch.Toggled += async (_, _) =>
             {
                 _settings.ShowAdvancedVideoStats = advancedStatsSwitch.IsOn;
+                UpdateVideoStatsOverlay();
                 await SaveSettingsAsync();
             };
 
@@ -907,6 +1228,7 @@ namespace Consolation
             flipHorizontalSwitch.Toggled += async (_, _) =>
             {
                 _settings.FlipHorizontal = flipHorizontalSwitch.IsOn;
+                ApplyVideoTransform();
                 await SaveSettingsAsync();
             };
 
@@ -918,6 +1240,7 @@ namespace Consolation
             flipVerticalSwitch.Toggled += async (_, _) =>
             {
                 _settings.FlipVertical = flipVerticalSwitch.IsOn;
+                ApplyVideoTransform();
                 await SaveSettingsAsync();
             };
 
@@ -1044,6 +1367,7 @@ namespace Consolation
             radioButton.Checked += async (_, _) =>
             {
                 _settings.RotationDegrees = degrees;
+                ApplyVideoTransform();
                 await SaveSettingsAsync();
             };
 
@@ -1125,7 +1449,14 @@ namespace Consolation
             };
         }
 
-        private sealed record CaptureDeviceOption(string Id, string Name, IReadOnlyList<VideoModeOption> VideoModes);
+        [DllImport("user32.dll")]
+        private static extern int ShowCursor(bool show);
+
+        private sealed record CaptureDeviceOption(
+            string Id,
+            string Name,
+            string? AudioDeviceId,
+            IReadOnlyList<VideoModeOption> VideoModes);
 
         private sealed class VideoModeOption
         {

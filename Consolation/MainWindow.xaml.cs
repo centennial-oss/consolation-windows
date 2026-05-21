@@ -72,6 +72,7 @@ namespace Consolation
         private bool _isSettingsDialogOpen;
         private bool _isMuted;
         private bool _cursorHidden;
+        private bool _screenSaverSuppressed;
         private Point _dragPointerOffset;
         private double _previousVolume = 70;
         private long _framesSinceLastStats;
@@ -445,6 +446,7 @@ namespace Consolation
             }
 
             _isPlaybackActive = true;
+            SuppressScreenSaver();
             StartupForm.Visibility = Visibility.Collapsed;
             PlaybackViewer.Visibility = Visibility.Visible;
             ConnectingOverlay.Visibility = Visibility.Visible;
@@ -709,6 +711,7 @@ namespace Consolation
             LowFpsWarningButton.Visibility = Visibility.Collapsed;
             VideoStatsOverlay.Visibility = Visibility.Collapsed;
             ShowMouseCursor();
+            RestoreScreenSaver();
             StopAudio();
 
             if (statsReader is not null)
@@ -1014,6 +1017,26 @@ namespace Consolation
             }
 
             _cursorHidden = false;
+        }
+
+        private void SuppressScreenSaver()
+        {
+            SetThreadExecutionState(
+                ExecutionState.EsContinuous |
+                ExecutionState.EsDisplayRequired |
+                ExecutionState.EsSystemRequired);
+            _screenSaverSuppressed = true;
+        }
+
+        private void RestoreScreenSaver()
+        {
+            if (!_screenSaverSuppressed)
+            {
+                return;
+            }
+
+            SetThreadExecutionState(ExecutionState.EsContinuous);
+            _screenSaverSuppressed = false;
         }
 
         private async void DeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1451,6 +1474,17 @@ namespace Consolation
 
         [DllImport("user32.dll")]
         private static extern int ShowCursor(bool show);
+
+        [DllImport("kernel32.dll")]
+        private static extern ExecutionState SetThreadExecutionState(ExecutionState esFlags);
+
+        [Flags]
+        private enum ExecutionState : uint
+        {
+            EsSystemRequired = 0x00000001,
+            EsDisplayRequired = 0x00000002,
+            EsContinuous = 0x80000000
+        }
 
         private sealed record CaptureDeviceOption(
             string Id,

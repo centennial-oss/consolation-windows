@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Consolation (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Consolation (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

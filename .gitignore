@@ -1,0 +1,219 @@
+# =========================================================
+# Consolation.Windows
+# Performance-first WinUI 3 + Native C++ project
+# =========================================================
+
+# ---------------------------------------------------------
+# OS / Filesystem Junk
+# ---------------------------------------------------------
+
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---------------------------------------------------------
+# Visual Studio
+# ---------------------------------------------------------
+
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio cache/options
+*.VC.db
+*.VC.opendb
+
+# ---------------------------------------------------------
+# Build Outputs
+# ---------------------------------------------------------
+
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+x64/
+x86/
+ARM64/
+artifacts/
+AppPackages/
+
+# Native build outputs
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# Exception:
+# Keep explicitly versioned runtime/native DLLs if desired
+#!third_party/runtime/*.dll
+
+# ---------------------------------------------------------
+# MSBuild / Generated
+# ---------------------------------------------------------
+
+Generated Files/
+Generated/
+BundleArtifacts/
+
+# WinUI / Packaging
+Package.StoreAssociation.xml
+*_TemporaryKey.pfx
+
+# MSIX/AppX generated
+AppxPackages/
+BundleArtifacts/
+TestResults/
+
+# ---------------------------------------------------------
+# NuGet
+# ---------------------------------------------------------
+
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+
+# Keep lock files
+#!packages.lock.json
+
+# ---------------------------------------------------------
+# .NET
+# ---------------------------------------------------------
+
+project.lock.json
+project.fragment.lock.json
+
+# ---------------------------------------------------------
+# Rider / JetBrains
+# ---------------------------------------------------------
+
+.idea/
+*.sln.iml
+
+# ---------------------------------------------------------
+# VS Code / Cursor
+# ---------------------------------------------------------
+
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# Cursor
+.cursor/
+.cursor-tmp/
+
+# ---------------------------------------------------------
+# CMake (if introduced later)
+# ---------------------------------------------------------
+
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+compile_commands.json
+Testing/
+
+# ---------------------------------------------------------
+# Ninja
+# ---------------------------------------------------------
+
+.ninja_deps
+.ninja_log
+
+# ---------------------------------------------------------
+# Coverage / Profiling
+# ---------------------------------------------------------
+
+coverage/
+*.coverage
+*.coveragexml
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# ---------------------------------------------------------
+# Temporary / Scratch
+# ---------------------------------------------------------
+
+tmp/
+temp/
+scratch/
+*.tmp
+
+# ---------------------------------------------------------
+# USB / Capture Debug Dumps
+# ---------------------------------------------------------
+
+captures/
+dumps/
+frame_dumps/
+usb_logs/
+trace_logs/
+
+# ---------------------------------------------------------
+# Local Dev Config
+# ---------------------------------------------------------
+
+.env
+.env.*
+local.settings.json
+
+# ---------------------------------------------------------
+# Signing / Certificates / Secrets
+# ---------------------------------------------------------
+
+*.pfx
+*.p12
+*.snk
+*.cer
+*.pvk
+*.key
+
+signing/
+certs/
+secrets/
+
+# ---------------------------------------------------------
+# Crash Dumps
+# ---------------------------------------------------------
+
+*.dmp
+
+# ---------------------------------------------------------
+# AI / Agent Scratch Artifacts
+# ---------------------------------------------------------
+
+.ai/
+.llm/
+.prompts-cache/
+
+# ---------------------------------------------------------
+# Optional Third-Party Source Trees
+# ---------------------------------------------------------
+
+third_party/build/
+third_party/out/
+third_party/install/
+
+# ---------------------------------------------------------
+# Keep Important Project Structure
+# ---------------------------------------------------------
+
+!.gitkeep
+
+# local data
+localdata/
+reference/
+
+TODO.md
+
+.cursor
+AGENTS.md
+
+*.log
+
+.claude

@@ -1,0 +1,296 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Consolation.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="Consolation">
+
+    <Grid
+        x:Name="RootGrid"
+        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.Resources>
+            <Style
+                x:Key="ToolbarIconButtonStyle"
+                BasedOn="{StaticResource DefaultButtonStyle}"
+                TargetType="Button">
+                <Setter Property="MinWidth" Value="40" />
+                <Setter Property="Width" Value="40" />
+                <Setter Property="Height" Value="40" />
+                <Setter Property="Padding" Value="0" />
+            </Style>
+        </Grid.Resources>
+
+        <Grid
+            x:Name="PlaybackViewer"
+            Background="#FF050608"
+            PointerMoved="PlaybackViewer_PointerMoved"
+            Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid
+                Margin="24"
+                BorderBrush="#263A465A"
+                BorderThickness="1">
+                <Grid.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Offset="0" Color="#FF111827" />
+                        <GradientStop Offset="0.42" Color="#FF121C2D" />
+                        <GradientStop Offset="1" Color="#FF07110D" />
+                    </LinearGradientBrush>
+                </Grid.Background>
+
+                <Grid Width="420" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <FontIcon
+                        Grid.Row="0"
+                        FontSize="52"
+                        Foreground="#FF90CDF4"
+                        Glyph="&#xE7F4;" />
+                    <TextBlock
+                        Grid.Row="1"
+                        Margin="0,18,0,0"
+                        HorizontalAlignment="Center"
+                        FontSize="22"
+                        FontWeight="SemiBold"
+                        Foreground="#FFF8FAFC"
+                        Text="Simulated HDMI preview" />
+                    <TextBlock
+                        Grid.Row="2"
+                        Margin="0,8,0,0"
+                        HorizontalAlignment="Center"
+                        Foreground="#FFB6C2CF"
+                        Text="Playback controls appear when the pointer moves."
+                        TextAlignment="Center" />
+                </Grid>
+            </Grid>
+
+            <Border
+                Grid.Row="1"
+                Height="28"
+                Background="#FF10151E"
+                BorderBrush="#FF263241"
+                BorderThickness="0,1,0,0">
+                <TextBlock
+                    Margin="16,0"
+                    VerticalAlignment="Center"
+                    FontSize="12"
+                    Foreground="#FFB6C2CF"
+                    Text="Preview: 1920 x 1080 @ 60 FPS, NV12" />
+            </Border>
+        </Grid>
+
+        <ScrollViewer
+            x:Name="StartupForm"
+            HorizontalScrollBarVisibility="Disabled"
+            VerticalScrollBarVisibility="Auto">
+            <Grid MinHeight="640" Padding="40">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel
+                    Width="520"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="18">
+                    <StackPanel Spacing="6">
+                        <TextBlock
+                            FontSize="34"
+                            FontWeight="SemiBold"
+                            Text="Consolation" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="Low-latency HDMI preview for USB capture devices."
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="8">
+                        <TextBlock
+                            FontWeight="SemiBold"
+                            Text="Capture device" />
+                        <ComboBox
+                            x:Name="DeviceComboBox"
+                            Width="520"
+                            Header="Device"
+                            PlaceholderText="Select a compatible capture device"
+                            SelectedIndex="0">
+                            <ComboBoxItem Content="Demo UVC capture card" />
+                            <ComboBoxItem Content="USB Video Device" />
+                        </ComboBox>
+                    </StackPanel>
+
+                    <StackPanel Spacing="8">
+                        <TextBlock
+                            FontWeight="SemiBold"
+                            Text="Video mode" />
+                        <MenuBar>
+                            <MenuBarItem x:Name="ResolutionMenu" Title="Resolution">
+                                <MenuFlyoutSubItem Text="1920 x 1080">
+                                    <MenuFlyoutSubItem Text="60 FPS">
+                                        <ToggleMenuFlyoutItem
+                                            x:Name="Mode1080p60Nv12MenuItem"
+                                            Click="VideoModeMenuItem_Click"
+                                            IsChecked="True"
+                                            Tag="1920 x 1080|60 FPS|NV12"
+                                            Text="NV12" />
+                                        <ToggleMenuFlyoutItem
+                                            Click="VideoModeMenuItem_Click"
+                                            Tag="1920 x 1080|60 FPS|MJPEG"
+                                            Text="MJPEG" />
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="30 FPS">
+                                        <ToggleMenuFlyoutItem
+                                            Click="VideoModeMenuItem_Click"
+                                            Tag="1920 x 1080|30 FPS|NV12"
+                                            Text="NV12" />
+                                        <ToggleMenuFlyoutItem
+                                            Click="VideoModeMenuItem_Click"
+                                            Tag="1920 x 1080|30 FPS|YUY2"
+                                            Text="YUY2" />
+                                    </MenuFlyoutSubItem>
+                                </MenuFlyoutSubItem>
+                                <MenuFlyoutSubItem Text="1280 x 720">
+                                    <MenuFlyoutSubItem Text="60 FPS">
+                                        <ToggleMenuFlyoutItem
+                                            Click="VideoModeMenuItem_Click"
+                                            Tag="1280 x 720|60 FPS|NV12"
+                                            Text="NV12" />
+                                        <ToggleMenuFlyoutItem
+                                            Click="VideoModeMenuItem_Click"
+                                            Tag="1280 x 720|60 FPS|MJPEG"
+                                            Text="MJPEG" />
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="30 FPS">
+                                        <ToggleMenuFlyoutItem
+                                            Click="VideoModeMenuItem_Click"
+                                            Tag="1280 x 720|30 FPS|YUY2"
+                                            Text="YUY2" />
+                                    </MenuFlyoutSubItem>
+                                </MenuFlyoutSubItem>
+                            </MenuBarItem>
+                        </MenuBar>
+                        <TextBlock
+                            x:Name="SelectedModeText"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="Selected: 1920 x 1080, 60 FPS, NV12" />
+                    </StackPanel>
+
+                    <Button
+                        x:Name="PlayButton"
+                        Width="180"
+                        Height="48"
+                        HorizontalAlignment="Left"
+                        Click="PlayButton_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon FontSize="16" Glyph="&#xE768;" />
+                            <TextBlock Text="Start playback" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <StackPanel
+                    Grid.Row="1"
+                    HorizontalAlignment="Right"
+                    Orientation="Horizontal"
+                    Spacing="8">
+                    <Button
+                        x:Name="SettingsButton"
+                        Click="SettingsButton_Click"
+                        Style="{StaticResource ToolbarIconButtonStyle}"
+                        ToolTipService.ToolTip="Settings">
+                        <FontIcon Glyph="&#xE713;" />
+                    </Button>
+                    <Button
+                        Click="HelpButton_Click"
+                        Style="{StaticResource ToolbarIconButtonStyle}"
+                        ToolTipService.ToolTip="Help">
+                        <FontIcon Glyph="&#xE897;" />
+                    </Button>
+                    <Button
+                        Click="AboutButton_Click"
+                        Style="{StaticResource ToolbarIconButtonStyle}"
+                        ToolTipService.ToolTip="About">
+                        <FontIcon Glyph="&#xE946;" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+
+        <Canvas
+            x:Name="ControlsLayer"
+            Visibility="Collapsed">
+            <Border
+                x:Name="PlaybackControlsBar"
+                Canvas.Left="32"
+                Canvas.Top="32"
+                Padding="10"
+                Background="#E61B202A"
+                BorderBrush="#403D4656"
+                BorderThickness="1"
+                CornerRadius="8"
+                PointerEntered="PlaybackControlsBar_PointerEntered"
+                PointerExited="PlaybackControlsBar_PointerExited"
+                PointerMoved="PlaybackControlsBar_PointerMoved"
+                PointerPressed="PlaybackControlsBar_PointerPressed"
+                PointerReleased="PlaybackControlsBar_PointerReleased">
+                <StackPanel Orientation="Horizontal" Spacing="14">
+                    <Button
+                        Width="42"
+                        Height="42"
+                        Padding="0"
+                        Background="#FFB4232E"
+                        Click="StopPlaybackButton_Click"
+                        ToolTipService.ToolTip="Stop playback">
+                        <FontIcon
+                            FontSize="18"
+                            Foreground="White"
+                            Glyph="&#xE7E8;" />
+                    </Button>
+
+                    <StackPanel Width="140" VerticalAlignment="Center" Spacing="2">
+                        <TextBlock
+                            FontSize="12"
+                            Foreground="#FFE5E7EB"
+                            Text="Volume" />
+                        <Slider
+                            Maximum="100"
+                            Minimum="0"
+                            Value="70" />
+                    </StackPanel>
+
+                    <StackPanel Width="140" VerticalAlignment="Center" Spacing="2">
+                        <TextBlock
+                            FontSize="12"
+                            Foreground="#FFE5E7EB"
+                            Text="Zoom" />
+                        <Slider
+                            Maximum="200"
+                            Minimum="50"
+                            Value="100" />
+                    </StackPanel>
+
+                    <Button
+                        Width="42"
+                        Height="42"
+                        Padding="0"
+                        Click="SettingsButton_Click"
+                        ToolTipService.ToolTip="Settings">
+                        <FontIcon Glyph="&#xE713;" />
+                    </Button>
+                </StackPanel>
+            </Border>
+        </Canvas>
+    </Grid>
+</Window>

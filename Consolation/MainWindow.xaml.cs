@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI;
@@ -36,6 +37,46 @@ namespace Consolation
     {
         private const string SettingsFileName = "settings.json";
         private static readonly string[] DeviceContainerProperties = ["System.Devices.ContainerId"];
+        private static readonly HashSet<(uint Width, uint Height)> WellKnownResolutions = new()
+        {
+            (3840, 2160),
+            (2560, 1440),
+            (1920, 1080),
+            (1280, 720)
+        };
+
+        private static readonly IReadOnlyDictionary<string, string> PixelFormatAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ARGB32"] = "ARGB32",
+            ["BGRA8"] = "BGRA8",
+            ["I420"] = "I420",
+            ["IYUV"] = "IYUV",
+            ["MJPEG"] = "MJPEG",
+            ["MJPG"] = "MJPEG",
+            ["NV12"] = "NV12",
+            ["P010"] = "P010",
+            ["P016"] = "P016",
+            ["P210"] = "P210",
+            ["P216"] = "P216",
+            ["RGB1"] = "RGB1",
+            ["RGB4"] = "RGB4",
+            ["RGB8"] = "RGB8",
+            ["RGB24"] = "RGB24",
+            ["RGB32"] = "RGB32",
+            ["RGB555"] = "RGB555",
+            ["RGB565"] = "RGB565",
+            ["UYVY"] = "UYVY",
+            ["Y210"] = "Y210",
+            ["Y216"] = "Y216",
+            ["Y410"] = "Y410",
+            ["Y416"] = "Y416",
+            ["Y41P"] = "Y41P",
+            ["YUY2"] = "YUY2",
+            ["YUYV"] = "YUY2",
+            ["YV12"] = "YV12",
+            ["YVU9"] = "YVU9",
+            ["YVYU"] = "YVYU"
+        };
 
         private readonly DispatcherTimer _controlsHideTimer = new()
         {
@@ -47,11 +88,8 @@ namespace Consolation
             Interval = TimeSpan.FromSeconds(1)
         };
 
-        private readonly JsonSerializerOptions _jsonOptions = new()
-        {
-            WriteIndented = true
-        };
-
+        private readonly SemaphoreSlim _deviceRefreshLock = new(1, 1);
+        private readonly SemaphoreSlim _settingsSaveLock = new(1, 1);
         private AppSettings _settings = new();
         private DeviceWatcher? _deviceWatcher;
         private MediaCapture? _mediaCapture;
@@ -97,8 +135,14 @@ namespace Consolation
             {
                 StorageFile file = await ApplicationData.Current.LocalFolder.GetFileAsync(SettingsFileName);
                 string json = await FileIO.ReadTextAsync(file);
-                _settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
-                _settings.VideoStatsPosition ??= "BottomLeft";
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    await SaveSettingsAsync();
+                    return;
+                }
+
+                _settings = JsonSerializer.Deserialize(json, AppJsonSerializerContext.Default.AppSettings) ?? new AppSettings();
+                _settings.VideoStatsPosition ??= "Off";
                 _settings.DeviceVideoModes ??= [];
             }
             catch (FileNotFoundException)
@@ -108,17 +152,36 @@ namespace Consolation
             catch
             {
                 _settings = new AppSettings();
+                await SaveSettingsAsync();
             }
         }
 
         private async Task SaveSettingsAsync()
         {
-            StorageFile file = await ApplicationData.Current.LocalFolder.CreateFileAsync(
-                SettingsFileName,
-                CreationCollisionOption.ReplaceExisting);
+            await _settingsSaveLock.WaitAsync();
 
-            string json = JsonSerializer.Serialize(_settings, _jsonOptions);
-            await FileIO.WriteTextAsync(file, json);
+            try
+            {
+                StorageFolder folder = ApplicationData.Current.LocalFolder;
+                StorageFile tempFile = await folder.CreateFileAsync($"{SettingsFileName}.tmp", CreationCollisionOption.ReplaceExisting);
+                string json = JsonSerializer.Serialize(_settings, AppJsonSerializerContext.Default.AppSettings);
+
+                await FileIO.WriteTextAsync(tempFile, json);
+
+                try
+                {
+                    StorageFile settingsFile = await folder.GetFileAsync(SettingsFileName);
+                    await tempFile.MoveAndReplaceAsync(settingsFile);
+                }
+                catch (FileNotFoundException)
+                {
+                    await tempFile.RenameAsync(SettingsFileName, NameCollisionOption.ReplaceExisting);
+                }
+            }
+            finally
+            {
+                _settingsSaveLock.Release();
+            }
         }
 
         private async Task InitializeCaptureDevicesAsync()
@@ -130,52 +193,80 @@ namespace Consolation
 
         private async Task RefreshCaptureDevicesAsync()
         {
+            await _deviceRefreshLock.WaitAsync();
             _isLoadingDevices = true;
-            string? previouslySelectedDeviceId = _selectedDevice?.Id;
 
-            DeviceComboBox.Items.Clear();
-            _captureDevices.Clear();
-            _selectedDevice = null;
-            _selectedVideoMode = null;
-            ResolutionMenu.Items.Clear();
-
-            DeviceInformationCollection devices = await DeviceInformation.FindAllAsync(MediaDevice.GetVideoCaptureSelector(), DeviceContainerProperties);
-            foreach (DeviceInformation device in devices.OrderBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase))
+            try
             {
-                CaptureDeviceOption? option = await TryCreateCaptureDeviceOptionAsync(device);
-                if (option is null || option.VideoModes.Count == 0)
+                string? previouslySelectedDeviceId = _selectedDevice?.SettingsKey ?? _selectedDevice?.Id;
+
+                DeviceComboBox.Items.Clear();
+                _captureDevices.Clear();
+                _selectedDevice = null;
+                _selectedVideoMode = null;
+                ClearVideoModeMenuItems();
+
+                DeviceInformationCollection devices = await DeviceInformation.FindAllAsync(MediaDevice.GetVideoCaptureSelector(), DeviceContainerProperties);
+                List<CaptureDeviceOption> discoveredDevices = [];
+                foreach (DeviceInformation device in devices.OrderBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase))
                 {
-                    continue;
+                    CaptureDeviceOption? option = await TryCreateCaptureDeviceOptionAsync(device);
+                    if (option is null || option.VideoModes.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    discoveredDevices.Add(option);
                 }
 
-                _captureDevices.Add(option);
-                DeviceComboBox.Items.Add(option.Name);
-            }
+                foreach (CaptureDeviceOption option in DedupeCaptureDevices(discoveredDevices))
+                {
+                    _captureDevices.Add(option);
+                    DeviceComboBox.Items.Add(option.Name);
+                }
 
-            if (_captureDevices.Count == 0)
+                if (_captureDevices.Count == 0)
+                {
+                    DeviceComboBox.Items.Add("No Capture Cards found");
+                    DeviceComboBox.SelectedIndex = 0;
+                    DeviceComboBox.IsEnabled = false;
+                    VideoModeMenuBar.IsEnabled = false;
+                    ResolutionMenu.Title = "No video modes";
+                    PlayButton.IsEnabled = false;
+                    return;
+                }
+
+                DeviceComboBox.IsEnabled = true;
+                int preferredDeviceIndex = GetPreferredDeviceIndex(previouslySelectedDeviceId);
+
+                DeviceComboBox.SelectedIndex = preferredDeviceIndex;
+                await SelectDeviceAsync(_captureDevices[preferredDeviceIndex]);
+            }
+            finally
             {
-                DeviceComboBox.Items.Add("No Capture Cards found");
-                DeviceComboBox.SelectedIndex = 0;
-                DeviceComboBox.IsEnabled = false;
-                VideoModeMenuBar.IsEnabled = false;
-                ResolutionMenu.Title = "No video modes";
-                SelectedModeText.Text = "Connect a capture card to choose a mode.";
-                PlayButton.IsEnabled = false;
                 _isLoadingDevices = false;
-                return;
+                _deviceRefreshLock.Release();
             }
+        }
 
-            DeviceComboBox.IsEnabled = true;
-            int preferredDeviceIndex = 0;
+        private int GetPreferredDeviceIndex(string? previouslySelectedDeviceId)
+        {
             if (previouslySelectedDeviceId is not null)
             {
-                int existingDeviceIndex = _captureDevices.FindIndex(device => device.Id == previouslySelectedDeviceId);
-                preferredDeviceIndex = Math.Max(0, existingDeviceIndex);
+                int existingDeviceIndex = _captureDevices.FindIndex(device => device.Id == previouslySelectedDeviceId || device.SettingsKey == previouslySelectedDeviceId);
+                if (existingDeviceIndex >= 0 && _captureDevices[existingDeviceIndex].DeviceSelectionScore >= GetHighestDeviceSelectionScore())
+                {
+                    return existingDeviceIndex;
+                }
             }
 
-            DeviceComboBox.SelectedIndex = preferredDeviceIndex;
-            _isLoadingDevices = false;
-            await SelectDeviceAsync(_captureDevices[preferredDeviceIndex]);
+            int highestScore = GetHighestDeviceSelectionScore();
+            return _captureDevices.FindIndex(device => device.DeviceSelectionScore == highestScore);
+        }
+
+        private int GetHighestDeviceSelectionScore()
+        {
+            return _captureDevices.Max(device => device.DeviceSelectionScore);
         }
 
         private static async Task<CaptureDeviceOption?> TryCreateCaptureDeviceOptionAsync(DeviceInformation device)
@@ -194,17 +285,21 @@ namespace Consolation
                     .OfType<VideoEncodingProperties>()
                     .Where(properties => properties.Width > 0 && properties.Height > 0 && properties.FrameRate.Denominator > 0)
                     .Select(VideoModeOption.FromProperties)
+                    .Where(mode => mode is not null)
+                    .Select(mode => mode!)
                     .GroupBy(mode => mode.SettingsKey, StringComparer.OrdinalIgnoreCase)
                     .Select(group => group.OrderBy(mode => FormatRank(mode.PixelFormat)).First())
-                    .OrderByDescending(mode => mode.Width)
+                    .OrderBy(mode => ResolutionCohortRank(mode.Width, mode.Height))
+                    .ThenByDescending(mode => mode.Width)
                     .ThenByDescending(mode => mode.Height)
                     .ThenByDescending(mode => mode.FrameRate)
                     .ThenBy(mode => FormatRank(mode.PixelFormat))
                     .ToList();
 
                 string? audioDeviceId = await FindPairedAudioDeviceIdAsync(device);
+                int deviceSelectionScore = ScoreCaptureCardLikelihood(device, audioDeviceId is not null, videoModes);
 
-                return new CaptureDeviceOption(device.Id, device.Name, audioDeviceId, videoModes);
+                return new CaptureDeviceOption(device.Id, GetDeviceSettingsKey(device), device.Name, audioDeviceId, deviceSelectionScore, videoModes);
             }
             catch
             {
@@ -236,11 +331,92 @@ namespace Consolation
             return null;
         }
 
+        private static IReadOnlyList<CaptureDeviceOption> DedupeCaptureDevices(IEnumerable<CaptureDeviceOption> devices)
+        {
+            return devices
+                .GroupBy(device => device.SettingsKey, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(device => device.DeviceSelectionScore)
+                    .ThenByDescending(device => device.VideoModes.Count)
+                    .ThenBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase)
+                    .First())
+                .OrderBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase)
+                .ToList();
+        }
+
+        private static string GetDeviceSettingsKey(DeviceInformation device)
+        {
+            Guid? containerId = TryGetContainerId(device);
+            return containerId is not null
+                ? $"container:{containerId:D}"
+                : $"id:{device.Id}";
+        }
+
         private static Guid? TryGetContainerId(DeviceInformation device)
         {
             return device.Properties.TryGetValue("System.Devices.ContainerId", out object? containerId) && containerId is Guid guid
                 ? guid
                 : null;
+        }
+
+        private static int ScoreCaptureCardLikelihood(
+            DeviceInformation device,
+            bool hasPairedAudioEndpoint,
+            IReadOnlyList<VideoModeOption> videoModes)
+        {
+            int score = 0;
+            string searchableName = device.Name.ToUpperInvariant();
+
+            if (hasPairedAudioEndpoint)
+            {
+                score += 35;
+            }
+
+            if (device.EnclosureLocation?.Panel is Windows.Devices.Enumeration.Panel.Front or Windows.Devices.Enumeration.Panel.Back)
+            {
+                score -= 70;
+            }
+            else
+            {
+                score += 8;
+            }
+
+            if (ContainsAny(searchableName, "CAPTURE", "HDMI", "GAME", "AVERMEDIA", "ELGATO", "CAM LINK", "MAGEWELL", "BLUEAVS", "GENKI", "EVGA", "RAZER RIPSAW", "PENGO", "MIRABOX"))
+            {
+                score += 60;
+            }
+
+            if (ContainsAny(searchableName, "UVC", "USB VIDEO", "VIDEO DEVICE"))
+            {
+                score += 20;
+            }
+
+            if (ContainsAny(searchableName, "WEBCAM", "WEB CAM", "CAMERA", "INTEGRATED", "FRONT", "REAR", "FACETIME", "REAL SENSE", "REALSENSE", "IR CAMERA"))
+            {
+                score -= 60;
+            }
+
+            if (videoModes.Any(mode => mode.Width >= 1920 && mode.FrameRate >= 59))
+            {
+                score += 12;
+            }
+
+            if (videoModes.Any(mode => mode.Width >= 2560 || mode.FrameRate >= 100))
+            {
+                score += 16;
+            }
+
+            if (videoModes.Any(mode => NormalizePixelFormat(mode.PixelFormat) is "MJPEG" or "YUY2" or "NV12"))
+            {
+                score += 6;
+            }
+
+            return score;
+        }
+
+        private static bool ContainsAny(string value, params string[] needles)
+        {
+            return needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
         }
 
         private static MediaCaptureInitializationSettings CreateMediaCaptureSettings(
@@ -295,7 +471,8 @@ namespace Consolation
 
         private VideoModeOption? TryGetSavedMode(CaptureDeviceOption device)
         {
-            if (!_settings.DeviceVideoModes.TryGetValue(device.Id, out SavedVideoMode? savedMode))
+            if (!_settings.DeviceVideoModes.TryGetValue(device.SettingsKey, out SavedVideoMode? savedMode) &&
+                !_settings.DeviceVideoModes.TryGetValue(device.Id, out savedMode))
             {
                 return null;
             }
@@ -304,7 +481,7 @@ namespace Consolation
                 mode.Width == savedMode.Width &&
                 mode.Height == savedMode.Height &&
                 Math.Abs(mode.FrameRate - savedMode.FrameRate) < 0.01 &&
-                string.Equals(mode.PixelFormat, savedMode.PixelFormat, StringComparison.OrdinalIgnoreCase));
+                string.Equals(mode.PixelFormat, NormalizePixelFormat(savedMode.PixelFormat), StringComparison.OrdinalIgnoreCase));
         }
 
         private static VideoModeOption? ChooseDefaultMode(IReadOnlyList<VideoModeOption> modes)
@@ -356,10 +533,11 @@ namespace Consolation
             string normalized = NormalizePixelFormat(pixelFormat);
             return normalized switch
             {
-                "YUY2" or "YUYV" => 0,
-                "NV12" => 1,
+                "NV12" => 0,
+                "YUY2" or "YUYV" => 1,
                 "UYVY" => 2,
-                "RGB24" or "RGB32" or "ARGB32" or "BGRA8" => 3,
+                "I420" or "IYUV" or "YV12" => 3,
+                "RGB24" or "RGB32" or "ARGB32" or "BGRA8" => 4,
                 "MJPEG" or "MJPG" => 20,
                 _ => 10
             };
@@ -367,16 +545,32 @@ namespace Consolation
 
         private void BuildVideoModeMenu(IReadOnlyList<VideoModeOption> modes, VideoModeOption? selectedMode)
         {
-            ResolutionMenu.Items.Clear();
+            ClearVideoModeMenuItems();
 
-            foreach (IGrouping<string, VideoModeOption> resolutionGroup in modes.GroupBy(mode => mode.ResolutionLabel))
+            List<IGrouping<(uint Width, uint Height), VideoModeOption>> resolutionGroups = modes
+                .GroupBy(mode => (mode.Width, mode.Height))
+                .OrderBy(group => ResolutionCohortRank(group.Key.Width, group.Key.Height))
+                .ThenByDescending(group => group.Key.Width)
+                .ThenByDescending(group => group.Key.Height)
+                .ToList();
+
+            bool addedSeparator = false;
+            foreach (IGrouping<(uint Width, uint Height), VideoModeOption> resolutionGroup in resolutionGroups)
             {
+                if (!addedSeparator && ResolutionCohortRank(resolutionGroup.Key.Width, resolutionGroup.Key.Height) > 0 && ResolutionMenu.Items.Count > 0)
+                {
+                    ResolutionMenu.Items.Add(new MenuFlyoutSeparator());
+                    addedSeparator = true;
+                }
+
                 MenuFlyoutSubItem resolutionItem = new()
                 {
-                    Text = resolutionGroup.Key
+                    Text = $"{resolutionGroup.Key.Width} x {resolutionGroup.Key.Height}"
                 };
 
-                foreach (IGrouping<string, VideoModeOption> frameRateGroup in resolutionGroup.GroupBy(mode => mode.FrameRateLabel))
+                foreach (IGrouping<string, VideoModeOption> frameRateGroup in resolutionGroup
+                    .GroupBy(mode => mode.FrameRateLabel)
+                    .OrderByDescending(group => group.Max(mode => mode.FrameRate)))
                 {
                     MenuFlyoutSubItem frameRateItem = new()
                     {
@@ -405,6 +599,19 @@ namespace Consolation
             PlayButton.IsEnabled = _selectedDevice is not null && selectedMode is not null;
         }
 
+        private void ClearVideoModeMenuItems()
+        {
+            while (ResolutionMenu.Items.Count > 0)
+            {
+                ResolutionMenu.Items.RemoveAt(ResolutionMenu.Items.Count - 1);
+            }
+        }
+
+        private static int ResolutionCohortRank(uint width, uint height)
+        {
+            return WellKnownResolutions.Contains((width, height)) ? 0 : 1;
+        }
+
         private async Task SelectVideoModeAsync(VideoModeOption? mode, bool saveSelection)
         {
             _selectedVideoMode = mode;
@@ -412,29 +619,51 @@ namespace Consolation
             if (mode is null)
             {
                 ResolutionMenu.Title = "No video modes";
-                SelectedModeText.Text = "No compatible preview modes found.";
                 PlayButton.IsEnabled = false;
                 return;
             }
 
-            ResolutionMenu.Title = $"{mode.Width}x{mode.Height} @ {mode.FrameRateLabel.Replace(" FPS", "p")}";
-            SelectedModeText.Text = $"Selected: {mode.ResolutionLabel}, {mode.FrameRateLabel}, {NormalizePixelFormat(mode.PixelFormat)}";
+            ResolutionMenu.Title = $"{mode.Width}x{mode.Height} @ {mode.FrameRateLabel.Replace(" FPS", "p")}, {NormalizePixelFormat(mode.PixelFormat)}";
             PlayButton.IsEnabled = _selectedDevice is not null;
 
             if (saveSelection && _selectedDevice is not null)
             {
-                _settings.DeviceVideoModes[_selectedDevice.Id] = SavedVideoMode.FromMode(mode);
+                _settings.DeviceVideoModes[_selectedDevice.SettingsKey] = SavedVideoMode.FromMode(mode);
+                _settings.DeviceVideoModes.Remove(_selectedDevice.Id);
                 await SaveSettingsAsync();
             }
         }
 
         private void MaximizeWindow()
         {
-            IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
-            WindowId windowId = Win32Interop.GetWindowIdFromWindow(windowHandle);
-            if (AppWindow.GetFromWindowId(windowId)?.Presenter is OverlappedPresenter presenter)
+            if (GetOverlappedPresenter() is OverlappedPresenter presenter)
             {
                 presenter.Maximize();
+            }
+        }
+
+        private OverlappedPresenter? GetOverlappedPresenter()
+        {
+            IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            WindowId windowId = Win32Interop.GetWindowIdFromWindow(windowHandle);
+            return AppWindow.GetFromWindowId(windowId)?.Presenter as OverlappedPresenter;
+        }
+
+        private void ShowWindowChrome()
+        {
+            if (GetOverlappedPresenter() is OverlappedPresenter presenter)
+            {
+                presenter.SetBorderAndTitleBar(true, true);
+            }
+
+            ExtendsContentIntoTitleBar = true;
+        }
+
+        private void HideWindowChrome()
+        {
+            if (GetOverlappedPresenter() is OverlappedPresenter presenter)
+            {
+                presenter.SetBorderAndTitleBar(false, false);
             }
         }
 
@@ -568,7 +797,7 @@ namespace Consolation
                 format.VideoFormat.Width == mode.Width &&
                 format.VideoFormat.Height == mode.Height &&
                 Math.Abs(GetFrameRate(format) - mode.FrameRate) < 0.01 &&
-                string.Equals(NormalizePixelFormat(format.Subtype), NormalizePixelFormat(mode.PixelFormat), StringComparison.OrdinalIgnoreCase));
+                string.Equals(TryRecognizePixelFormat(format.Subtype), mode.PixelFormat, StringComparison.OrdinalIgnoreCase));
         }
 
         private static MediaFrameFormat? FindClosestFrameFormat(MediaFrameSource frameSource, VideoModeOption mode)
@@ -578,7 +807,7 @@ namespace Consolation
                     .Where(format => format.VideoFormat is not null)
                     .OrderBy(format => format.VideoFormat.Width == mode.Width && format.VideoFormat.Height == mode.Height ? 0 : 1)
                     .ThenBy(format => Math.Abs(GetFrameRate(format) - mode.FrameRate))
-                    .ThenBy(format => FormatRank(format.Subtype))
+                    .ThenBy(format => FormatRank(NormalizePixelFormat(format.Subtype)))
                     .FirstOrDefault();
         }
 
@@ -710,6 +939,7 @@ namespace Consolation
             _statsTimer.Stop();
             LowFpsWarningButton.Visibility = Visibility.Collapsed;
             VideoStatsOverlay.Visibility = Visibility.Collapsed;
+            ShowWindowChrome();
             ShowMouseCursor();
             RestoreScreenSaver();
             StopAudio();
@@ -837,6 +1067,7 @@ namespace Consolation
 
         private void ShowPlaybackControls(bool restartTimer)
         {
+            ShowWindowChrome();
             PlaybackControlsBar.Visibility = Visibility.Visible;
 
             if (restartTimer)
@@ -863,6 +1094,7 @@ namespace Consolation
             if (_isPlaybackActive && !_isControlsPointerOver && !_isDraggingControls && !_isSettingsDialogOpen)
             {
                 PlaybackControlsBar.Visibility = Visibility.Collapsed;
+                HideWindowChrome();
                 HideMouseCursor();
             }
         }
@@ -1464,12 +1696,55 @@ namespace Consolation
 
         private static string NormalizePixelFormat(string pixelFormat)
         {
-            return pixelFormat.ToUpperInvariant() switch
+            return TryRecognizePixelFormat(pixelFormat) ?? pixelFormat.ToUpperInvariant();
+        }
+
+        private static string? TryRecognizePixelFormat(string pixelFormat)
+        {
+            string trimmed = pixelFormat.Trim();
+            if (PixelFormatAliases.TryGetValue(trimmed, out string? alias))
             {
-                "MJPG" => "MJPEG",
-                "YUYV" => "YUY2",
-                _ => pixelFormat.ToUpperInvariant()
-            };
+                return alias;
+            }
+
+            if (Guid.TryParse(trimmed.Trim('{', '}'), out Guid guid))
+            {
+                string guidText = guid.ToString("D").ToUpperInvariant();
+                return guidText switch
+                {
+                    "E436EB78-524F-11CE-9F53-0020AF0BA770" => "RGB1",
+                    "E436EB79-524F-11CE-9F53-0020AF0BA770" => "RGB4",
+                    "E436EB7A-524F-11CE-9F53-0020AF0BA770" => "RGB8",
+                    "E436EB7B-524F-11CE-9F53-0020AF0BA770" => "RGB565",
+                    "E436EB7C-524F-11CE-9F53-0020AF0BA770" => "RGB555",
+                    "E436EB7D-524F-11CE-9F53-0020AF0BA770" => "RGB24",
+                    "E436EB7E-524F-11CE-9F53-0020AF0BA770" => "RGB32",
+                    _ => TryGetFourCcSubtype(guidText)
+                };
+            }
+
+            return null;
+        }
+
+        private static string? TryGetFourCcSubtype(string guidText)
+        {
+            const string fourCcGuidSuffix = "-0000-0010-8000-00AA00389B71";
+            if (!guidText.EndsWith(fourCcGuidSuffix, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            string firstPart = guidText[..8];
+            char[] chars =
+            [
+                (char)Convert.ToByte(firstPart[6..8], 16),
+                (char)Convert.ToByte(firstPart[4..6], 16),
+                (char)Convert.ToByte(firstPart[2..4], 16),
+                (char)Convert.ToByte(firstPart[0..2], 16)
+            ];
+
+            string fourCc = new(chars);
+            return PixelFormatAliases.TryGetValue(fourCc, out string? alias) ? alias : null;
         }
 
         [DllImport("user32.dll")]
@@ -1488,8 +1763,10 @@ namespace Consolation
 
         private sealed record CaptureDeviceOption(
             string Id,
+            string SettingsKey,
             string Name,
             string? AudioDeviceId,
+            int DeviceSelectionScore,
             IReadOnlyList<VideoModeOption> VideoModes);
 
         private sealed class VideoModeOption
@@ -1503,15 +1780,21 @@ namespace Consolation
             public string FrameRateLabel => $"{FrameRate:0.##} FPS";
             public string SettingsKey => $"{Width}x{Height}|{FrameRate:0.###}|{NormalizePixelFormat(PixelFormat)}";
 
-            public static VideoModeOption FromProperties(VideoEncodingProperties properties)
+            public static VideoModeOption? FromProperties(VideoEncodingProperties properties)
             {
+                string? pixelFormat = TryRecognizePixelFormat(properties.Subtype);
+                if (pixelFormat is null)
+                {
+                    return null;
+                }
+
                 return new VideoModeOption
                 {
                     Properties = properties,
                     Width = properties.Width,
                     Height = properties.Height,
                     FrameRate = properties.FrameRate.Numerator / (double)properties.FrameRate.Denominator,
-                    PixelFormat = NormalizePixelFormat(properties.Subtype)
+                    PixelFormat = pixelFormat
                 };
             }
         }
@@ -1537,13 +1820,19 @@ namespace Consolation
 
         private sealed class AppSettings
         {
-            public string VideoStatsPosition { get; set; } = "BottomLeft";
+            public string VideoStatsPosition { get; set; } = "Off";
             public bool ShowLowFpsWarnings { get; set; } = true;
             public bool ShowAdvancedVideoStats { get; set; }
             public int RotationDegrees { get; set; }
             public bool FlipHorizontal { get; set; }
             public bool FlipVertical { get; set; }
             public Dictionary<string, SavedVideoMode> DeviceVideoModes { get; set; } = [];
+        }
+
+        [JsonSourceGenerationOptions(WriteIndented = true)]
+        [JsonSerializable(typeof(AppSettings))]
+        private sealed partial class AppJsonSerializerContext : JsonSerializerContext
+        {
         }
     }
 }

@@ -114,7 +114,7 @@
             x:Name="StartupForm"
             HorizontalScrollBarVisibility="Disabled"
             VerticalScrollBarVisibility="Auto">
-            <Grid MinHeight="720" Padding="40">
+            <Grid Padding="40">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
@@ -138,14 +138,19 @@
                                 CornerRadius="16">
                                 <Image Source="Assets/app-icon.png" Stretch="UniformToFill" />
                             </Border>
-                            <StackPanel VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                            <StackPanel
+                                VerticalAlignment="Center"
+                                Orientation="Horizontal"
+                                Spacing="8">
                                 <TextBlock
+                                    VerticalAlignment="Bottom"
                                     FontSize="30"
                                     FontWeight="SemiBold"
                                     Foreground="White"
                                     Text="Consolation" />
                                 <TextBlock
                                     VerticalAlignment="Bottom"
+                                    Margin="0,0,0,4"
                                     FontSize="16"
                                     Foreground="#CCFFFFFF"
                                     Text="v1.0.0" />
@@ -191,18 +196,23 @@
                                 FontWeight="SemiBold"
                                 Foreground="White"
                                 Text="Resolution &amp; Frame Rate" />
-                            <StackPanel
+                            <Border
                                 Grid.Row="1"
                                 Grid.Column="1"
-                                Spacing="6">
-                                <MenuBar x:Name="VideoModeMenuBar" Background="Transparent" IsEnabled="False">
+                                Width="320"
+                                Height="40"
+                                HorizontalAlignment="Stretch"
+                                Background="#1AFFFFFF"
+                                CornerRadius="4">
+                                <MenuBar
+                                    x:Name="VideoModeMenuBar"
+                                    HorizontalAlignment="Stretch"
+                                    VerticalAlignment="Center"
+                                    Background="Transparent"
+                                    IsEnabled="False">
                                     <MenuBarItem x:Name="ResolutionMenu" Title="No video modes" />
                                 </MenuBar>
-                                <TextBlock
-                                    x:Name="SelectedModeText"
-                                    Foreground="#CCFFFFFF"
-                                    Text="Connect a capture card to choose a mode." />
-                            </StackPanel>
+                            </Border>
                         </Grid>
 
                         <Button

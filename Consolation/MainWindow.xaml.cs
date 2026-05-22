@@ -129,6 +129,7 @@ namespace Consolation
         {
             InitializeComponent();
 
+            SetWindowIcon();
             ExtendsContentIntoTitleBar = true;
             MaximizeWindow();
             InitializePermissionNotice();
@@ -674,6 +675,13 @@ namespace Consolation
             {
                 presenter.Maximize();
             }
+        }
+
+        private void SetWindowIcon()
+        {
+            IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            WindowId windowId = Win32Interop.GetWindowIdFromWindow(windowHandle);
+            AppWindow.GetFromWindowId(windowId)?.SetIcon("Assets/app-icon.ico");
         }
 
         private OverlappedPresenter? GetOverlappedPresenter()

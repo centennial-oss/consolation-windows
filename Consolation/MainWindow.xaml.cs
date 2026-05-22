@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -18,6 +17,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Devices.Enumeration;
 using Windows.Foundation;
 using Windows.Media;
@@ -1454,59 +1454,287 @@ namespace Consolation
         private async void HelpButton_Click(object sender, RoutedEventArgs e)
         {
             await ShowModalAsync(
-                "Help",
-                new StackPanel
-                {
-                    Spacing = 12,
-                    Children =
-                    {
-                        new TextBlock
-                        {
-                            Text = "Consolation previews HDMI sources through USB capture hardware using the lowest-latency path available.",
-                            TextWrapping = TextWrapping.Wrap
-                        },
-                        new TextBlock
-                        {
-                            Text = "Connect the HDMI source, attach the capture card, choose the device and video mode, then start playback.",
-                            TextWrapping = TextWrapping.Wrap
-                        },
-                        new TextBlock
-                        {
-                            Text = "If the preview is blank later in development, try another USB port, a lower frame rate, or a different advertised pixel format.",
-                            TextWrapping = TextWrapping.Wrap
-                        }
-                    }
-                });
+                "Consolation Help",
+                CreateHelpContent());
         }
 
         private async void AboutButton_Click(object sender, RoutedEventArgs e)
         {
-            await ShowModalAsync(
-                "About Consolation",
-                new StackPanel
+            await ShowCustomModalAsync(CreateAboutTitle(), CreateAboutContent());
+        }
+
+        private static FrameworkElement CreateHelpContent()
+        {
+            return new StackPanel
+            {
+                Width = 680,
+                Spacing = 24,
+                Children =
                 {
-                    Spacing = 10,
-                    Children =
+                    CreateDivider(),
+                    CreateInfoRow("\uE768", "Getting Started", "Connect a USB capture device, select it from the list, and press the Play button."),
+                    CreateInfoRow("\uE7C9", "Frame Rate", "For best results, select a frame rate that is equal to or higher than the frame rate of the source input. If playback frame rate is lower than expected, avoid USB hubs and replace low-quality cables."),
+                    CreateInfoRow("\uE8A3", "Video Controls", "Use the View menu to resize the playback window, rotate the picture, mirror the image, and show frame rate stats."),
+                    CreateInfoRow("\uE995", "Audio Controls", "Use the Audio menu to mute playback, set the volume, or adjust the audio buffer if you hear dropouts or stuttering. A larger buffer may improve audio performance while causing audio to lag further behind the video."),
+                    CreateInfoRow("\uEDA2", "Device Support", "While any USB Video Class (UVC) device should work with Consolation, video quality ultimately depends on the capture device hardware. Some devices may advertise resolutions and frame rates beyond their actual capabilities."),
+                    CreateDivider()
+                }
+            };
+        }
+
+        private FrameworkElement CreateAboutContent()
+        {
+            HyperlinkButton gitHubLink = new()
+            {
+                NavigateUri = new Uri("https://github.com/centennial-oss/consolation"),
+                Padding = new Thickness(0),
+                Content = CreateLinkRow("\uE8A7", "GitHub: centennial-oss/consolation")
+            };
+
+            HyperlinkButton storeLink = new()
+            {
+                NavigateUri = new Uri("ms-windows-store://review/?ProductId=9caa6ca7-6d48-49ca-afaa-64380aad3643"),
+                Padding = new Thickness(0),
+                Content = CreateLinkRow("\uE734", "Rate Consolation on the Microsoft Store")
+            };
+
+            return new StackPanel
+            {
+                Width = 680,
+                Spacing = 22,
+                Children =
+                {
+                    new TextBlock
                     {
-                        new TextBlock
+                        Text = "Consolation and the Consolation logo are trademarks of Centennial OSS Inc.\nAll rights reserved.",
+                        Foreground = SecondaryTextBrush(),
+                        TextWrapping = TextWrapping.Wrap
+                    },
+                    CreateDivider(),
+                    CreateInfoRow("\uE714", "Consolation is a USB Capture Card utility for viewing gaming consoles, Raspberry Pis, and other HDMI devices on a Windows PC.", iconOnly: true),
+                    CreateInfoRow("\uE7BA", "External USB Video Class (UVC) capture hardware is required.", iconOnly: true),
+                    CreateInfoRow("\uE83D", "Consolation is 100% private. It does not collect analytics or snoop on your usage. Nothing ever leaves your device. Period.", iconOnly: true),
+                    CreateInfoRow("\uEB51", "This software is completely free and open source for you to enjoy.", iconOnly: true),
+                    gitHubLink,
+                    CreateBuildInfoSection(),
+                    CreateDivider(),
+                    storeLink
+                }
+            };
+        }
+
+        private static FrameworkElement CreateAboutTitle()
+        {
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 14,
+                Children =
+                {
+                    new Image
+                    {
+                        Width = 64,
+                        Height = 64,
+                        Source = new BitmapImage(new Uri("ms-appx:///Assets/app-icon.png"))
+                    },
+                    new StackPanel
+                    {
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Spacing = 4,
+                        Children =
                         {
-                            Text = "Consolation",
-                            FontSize = 20,
-                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
-                        },
-                        new TextBlock
-                        {
-                            Text = "Open source low-latency HDMI preview for capture cards.",
-                            TextWrapping = TextWrapping.Wrap
-                        },
-                        new TextBlock { Text = GetBuildInfo(), TextWrapping = TextWrapping.Wrap },
-                        new TextBlock
-                        {
-                            Text = "Uses Windows Media Foundation / UVC preview APIs for capture card detection and playback.",
-                            TextWrapping = TextWrapping.Wrap
+                            new StackPanel
+                            {
+                                Orientation = Orientation.Horizontal,
+                                Spacing = 10,
+                                Children =
+                                {
+                                    new TextBlock
+                                    {
+                                        Text = "Consolation\u2122",
+                                        FontSize = 30,
+                                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+                                    },
+                                    new TextBlock
+                                    {
+                                        Text = $"v{BuildInfo.Version}",
+                                        Margin = new Thickness(0, 9, 0, 0),
+                                        FontSize = 15,
+                                        Foreground = SecondaryTextBrush()
+                                    }
+                                }
+                            },
+                            new TextBlock
+                            {
+                                Text = "Copyright \u00A9 2026 Centennial OSS Inc.",
+                                FontSize = 14,
+                                Foreground = SecondaryTextBrush()
+                            }
                         }
                     }
-                });
+                }
+            };
+        }
+
+        private FrameworkElement CreateBuildInfoSection()
+        {
+            Button copyButton = new()
+            {
+                Content = "Copy to Clipboard",
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                MinWidth = 160,
+                CornerRadius = new CornerRadius(20)
+            };
+
+            copyButton.Click += (_, _) =>
+            {
+                DataPackage package = new() { RequestedOperation = DataPackageOperation.Copy };
+                package.SetText(BuildInfo.CopyableBlob);
+                Clipboard.SetContent(package);
+                copyButton.Content = "Copied";
+            };
+
+            Grid buildInfoGrid = new()
+            {
+                Padding = new Thickness(14, 12, 14, 12),
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(70, 0, 0, 0)),
+                CornerRadius = new CornerRadius(8),
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = BuildInfo.CopyableBlob,
+                        FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+                        FontSize = 18,
+                        TextWrapping = TextWrapping.Wrap,
+                        IsTextSelectionEnabled = true,
+                        Margin = new Thickness(0, 0, 180, 0)
+                    },
+                    copyButton
+                }
+            };
+
+            return new StackPanel
+            {
+                Spacing = 10,
+                Children =
+                {
+                    CreateIconTextRow("\uE8A5", "Build info (copy for support)", SecondaryTextBrush(), 16),
+                    buildInfoGrid
+                }
+            };
+        }
+
+        private static Grid CreateInfoRow(string glyph, string title, string body)
+        {
+            Grid row = CreateInfoRowShell(glyph);
+            row.Children.Add(WithColumnLocal(new StackPanel
+            {
+                Spacing = 5,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = title,
+                        FontSize = 18,
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        TextWrapping = TextWrapping.Wrap
+                    },
+                    new TextBlock
+                    {
+                        Text = body,
+                        FontSize = 17,
+                        Foreground = SecondaryTextBrush(),
+                        TextWrapping = TextWrapping.Wrap,
+                        LineHeight = 24
+                    }
+                }
+            }, 1));
+            return row;
+        }
+
+        private static Grid CreateInfoRow(string glyph, string text, bool iconOnly)
+        {
+            Grid row = CreateInfoRowShell(glyph);
+            row.Children.Add(WithColumnLocal(new TextBlock
+            {
+                Text = text,
+                FontSize = 17,
+                Foreground = SecondaryTextBrush(),
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 26
+            }, 1));
+            return row;
+        }
+
+        private static Grid CreateInfoRowShell(string glyph)
+        {
+            return new Grid
+            {
+                ColumnSpacing = 14,
+                ColumnDefinitions =
+                {
+                    new ColumnDefinition { Width = new GridLength(34) },
+                    new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }
+                },
+                Children =
+                {
+                    new FontIcon
+                    {
+                        Glyph = glyph,
+                        FontSize = 22,
+                        Foreground = SecondaryTextBrush(),
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Top
+                    }
+                }
+            };
+        }
+
+        private static StackPanel CreateLinkRow(string glyph, string text)
+        {
+            return CreateIconTextRow(glyph, text, new SolidColorBrush(Windows.UI.Color.FromArgb(255, 54, 148, 255)), 18);
+        }
+
+        private static StackPanel CreateIconTextRow(string glyph, string text, Brush foreground, double fontSize)
+        {
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 12,
+                Children =
+                {
+                    new FontIcon
+                    {
+                        Glyph = glyph,
+                        FontSize = fontSize,
+                        Foreground = foreground,
+                        Width = 34
+                    },
+                    new TextBlock
+                    {
+                        Text = text,
+                        FontSize = fontSize,
+                        Foreground = foreground,
+                        TextWrapping = TextWrapping.Wrap
+                    }
+                }
+            };
+        }
+
+        private static Border CreateDivider()
+        {
+            return new Border
+            {
+                Height = 1,
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(45, 255, 255, 255))
+            };
+        }
+
+        private static SolidColorBrush SecondaryTextBrush()
+        {
+            return new SolidColorBrush(Windows.UI.Color.FromArgb(180, 255, 255, 255));
         }
 
         private FrameworkElement CreateSettingsContent()
@@ -1717,6 +1945,12 @@ namespace Consolation
             return element;
         }
 
+        private static T WithColumnLocal<T>(T element, int column) where T : FrameworkElement
+        {
+            Grid.SetColumn(element, column);
+            return element;
+        }
+
         private RadioButton CreateRotationRadioButton(string label, int degrees)
         {
             RadioButton radioButton = new()
@@ -1738,8 +1972,13 @@ namespace Consolation
 
         private Task ShowModalAsync(string title, FrameworkElement content)
         {
+            return ShowCustomModalAsync(CreateDialogTitle(title), content);
+        }
+
+        private Task ShowCustomModalAsync(FrameworkElement title, FrameworkElement content)
+        {
             _modalCompletionSource = new TaskCompletionSource();
-            ModalTitleHost.Content = CreateDialogTitle(title);
+            ModalTitleHost.Content = title;
             ModalContentHost.Content = content;
             ModalOverlay.Visibility = Visibility.Visible;
             return _modalCompletionSource.Task;
@@ -1777,15 +2016,6 @@ namespace Consolation
                     }
                 }
             };
-        }
-
-        private static string GetBuildInfo()
-        {
-            string version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
-            string packageVersion = GetPackageVersion();
-            string buildTime = File.GetLastWriteTime(Assembly.GetExecutingAssembly().Location).ToString("g");
-
-            return $"Assembly version: {version}\nPackage version: {packageVersion}\nBuild time: {buildTime}";
         }
 
         private static string GetPackageVersion()

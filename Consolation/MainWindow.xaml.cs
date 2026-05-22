@@ -30,12 +30,15 @@ using Windows.Media.MediaProperties;
 using Windows.Media.Playback;
 using Windows.Media.Render;
 using Windows.Storage;
+using Windows.System;
 
 namespace Consolation
 {
     public sealed partial class MainWindow : Window
     {
         private const string SettingsFileName = "settings.json";
+        private const string DialogIconUri = "ms-appx:///Assets/Square44x44Logo.scale-200.png";
+        private const double ModalContentWidth = 680;
         private static readonly string[] DeviceContainerProperties = ["System.Devices.ContainerId"];
         private static readonly HashSet<(uint Width, uint Height)> WellKnownResolutions = new()
         {
@@ -1430,7 +1433,7 @@ namespace Consolation
             ShowMouseCursor();
             ShowPlaybackControls(restartTimer: false);
 
-            await ShowModalAsync("Settings", CreateSettingsContent());
+            await ShowCustomModalAsync(CreateDialogTitle("Settings"), CreateSettingsContent(), CreateSettingsActions());
 
             _isSettingsDialogOpen = false;
             StartControlsHideTimer();
@@ -1468,23 +1471,23 @@ namespace Consolation
 
         private async void AboutButton_Click(object sender, RoutedEventArgs e)
         {
-            await ShowCustomModalAsync(CreateAboutTitle(), CreateAboutContent());
+            await ShowCustomModalAsync(CreateAboutTitle(), CreateAboutContent(), CreateAboutActions());
         }
 
         private static FrameworkElement CreateHelpContent()
         {
             return new StackPanel
             {
-                Width = 680,
+                Width = ModalContentWidth,
                 Spacing = 24,
                 Children =
                 {
                     CreateDivider(),
                     CreateInfoRow("\uE768", "Getting Started", "Connect a USB capture device, select it from the list, and press the Play button."),
-                    CreateInfoRow("\uE7C9", "Frame Rate", "For best results, select a frame rate that is equal to or higher than the frame rate of the source input. If playback frame rate is lower than expected, avoid USB hubs and replace low-quality cables."),
-                    CreateInfoRow("\uE8A3", "Video Controls", "Use the View menu to resize the playback window, rotate the picture, mirror the image, and show frame rate stats."),
-                    CreateInfoRow("\uE995", "Audio Controls", "Use the Audio menu to mute playback, set the volume, or adjust the audio buffer if you hear dropouts or stuttering. A larger buffer may improve audio performance while causing audio to lag further behind the video."),
-                    CreateInfoRow("\uEDA2", "Device Support", "While any USB Video Class (UVC) device should work with Consolation, video quality ultimately depends on the capture device hardware. Some devices may advertise resolutions and frame rates beyond their actual capabilities."),
+                    CreateInfoRow("\uE799", "Frame Rate", "For best results, select the same frame rate as that of the source input. If playback lags, avoid USB hubs and replace low-quality cables."),
+                    CreateInfoRow("\uE9A6", "Video Controls", "Use the Settings sheet to rotate/mirror the feed and show video stats."),
+                    CreateInfoRow("\uE995", "Audio Controls", "Use the playback controls to mute audio and set the volume as desired."),
+                    CreateInfoRow("\uE88E", "Device Support", "While any USB Video Class (UVC) device should work with Consolation, video quality ultimately depends on the capture device hardware. Some devices may advertise resolutions and frame rates beyond their actual capabilities."),
                     CreateDivider()
                 }
             };
@@ -1492,23 +1495,9 @@ namespace Consolation
 
         private FrameworkElement CreateAboutContent()
         {
-            HyperlinkButton gitHubLink = new()
-            {
-                NavigateUri = new Uri("https://github.com/centennial-oss/consolation"),
-                Padding = new Thickness(0),
-                Content = CreateLinkRow("\uE8A7", "GitHub: centennial-oss/consolation")
-            };
-
-            HyperlinkButton storeLink = new()
-            {
-                NavigateUri = new Uri("ms-windows-store://review/?ProductId=9caa6ca7-6d48-49ca-afaa-64380aad3643"),
-                Padding = new Thickness(0),
-                Content = CreateLinkRow("\uE734", "Rate Consolation on the Microsoft Store")
-            };
-
             return new StackPanel
             {
-                Width = 680,
+                Width = ModalContentWidth,
                 Spacing = 22,
                 Children =
                 {
@@ -1521,14 +1510,21 @@ namespace Consolation
                     CreateDivider(),
                     CreateInfoRow("\uE714", "Consolation is a USB Capture Card utility for viewing gaming consoles, Raspberry Pis, and other HDMI devices on a Windows PC.", iconOnly: true),
                     CreateInfoRow("\uE7BA", "External USB Video Class (UVC) capture hardware is required.", iconOnly: true),
-                    CreateInfoRow("\uE83D", "Consolation is 100% private. It does not collect analytics or snoop on your usage. Nothing ever leaves your device. Period.", iconOnly: true),
+                    CreateInfoRow("\uEA18", "Consolation is 100% private. It does not collect analytics or snoop on your usage. Nothing ever leaves your device. Period.", iconOnly: true),
                     CreateInfoRow("\uEB51", "This software is completely free and open source for you to enjoy.", iconOnly: true),
-                    gitHubLink,
                     CreateBuildInfoSection(),
-                    CreateDivider(),
-                    storeLink
+                    CreateDivider()
                 }
             };
+        }
+
+        private static IEnumerable<UIElement> CreateAboutActions()
+        {
+            return
+            [
+                CreateModalActionButton("GitHub", "https://github.com/centennial-oss/consolation-windows"),
+                CreateModalActionButton("Privacy Policy", "https://centennialoss.org/privacy/")
+            ];
         }
 
         private static FrameworkElement CreateAboutTitle()
@@ -1543,7 +1539,7 @@ namespace Consolation
                     {
                         Width = 64,
                         Height = 64,
-                        Source = new BitmapImage(new Uri("ms-appx:///Assets/app-icon.png"))
+                        Source = new BitmapImage(new Uri(DialogIconUri))
                     },
                     new StackPanel
                     {
@@ -1608,6 +1604,12 @@ namespace Consolation
                 Padding = new Thickness(14, 12, 14, 12),
                 Background = new SolidColorBrush(Windows.UI.Color.FromArgb(70, 0, 0, 0)),
                 CornerRadius = new CornerRadius(8),
+                ColumnSpacing = 14,
+                ColumnDefinitions =
+                {
+                    new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
+                    new ColumnDefinition { Width = GridLength.Auto }
+                },
                 Children =
                 {
                     new TextBlock
@@ -1616,10 +1618,9 @@ namespace Consolation
                         FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
                         FontSize = 18,
                         TextWrapping = TextWrapping.Wrap,
-                        IsTextSelectionEnabled = true,
-                        Margin = new Thickness(0, 0, 180, 0)
+                        IsTextSelectionEnabled = true
                     },
-                    copyButton
+                    WithGridColumn(copyButton, 1)
                 }
             };
 
@@ -1791,7 +1792,8 @@ namespace Consolation
 
             ToggleSwitch lowFpsSwitch = new()
             {
-                Header = "Show Low FPS Warnings",
+                OnContent = string.Empty,
+                OffContent = string.Empty,
                 IsOn = _settings.ShowLowFpsWarnings
             };
             lowFpsSwitch.Toggled += async (_, _) =>
@@ -1803,7 +1805,8 @@ namespace Consolation
 
             ToggleSwitch advancedStatsSwitch = new()
             {
-                Header = "Show Advanced Video Stats",
+                OnContent = string.Empty,
+                OffContent = string.Empty,
                 IsOn = _settings.ShowAdvancedVideoStats
             };
             advancedStatsSwitch.Toggled += async (_, _) =>
@@ -1820,7 +1823,8 @@ namespace Consolation
 
             ToggleSwitch flipHorizontalSwitch = new()
             {
-                Header = "Horizontal",
+                OnContent = string.Empty,
+                OffContent = string.Empty,
                 IsOn = _settings.FlipHorizontal
             };
             flipHorizontalSwitch.Toggled += async (_, _) =>
@@ -1832,7 +1836,8 @@ namespace Consolation
 
             ToggleSwitch flipVerticalSwitch = new()
             {
-                Header = "Vertical",
+                OnContent = string.Empty,
+                OffContent = string.Empty,
                 IsOn = _settings.FlipVertical
             };
             flipVerticalSwitch.Toggled += async (_, _) =>
@@ -1844,33 +1849,25 @@ namespace Consolation
 
             StackPanel content = new()
             {
-                Width = 680,
-                Spacing = 18,
+                Width = ModalContentWidth,
+                Spacing = 20,
                 Children =
                 {
-                    new TextBlock
-                    {
-                        Text = "Video Telemetry",
-                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
-                    },
+                    CreateDivider(),
+                    CreateSettingsSectionTitle("Video Telemetry"),
                     new Grid
                     {
-                        ColumnSpacing = 16,
+                        ColumnSpacing = 10,
                         ColumnDefinitions =
                         {
-                            new ColumnDefinition { Width = new GridLength(150) },
-                            new ColumnDefinition { Width = new GridLength(110) },
-                            new ColumnDefinition { Width = new GridLength(160) },
-                            new ColumnDefinition { Width = new GridLength(170) }
+                            new ColumnDefinition { Width = new GridLength(170) },
+                            new ColumnDefinition { Width = new GridLength(82) },
+                            new ColumnDefinition { Width = new GridLength(132) },
+                            new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }
                         },
                         Children =
                         {
-                            new TextBlock
-                            {
-                                Text = "Show Video Stats",
-                                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                                VerticalAlignment = VerticalAlignment.Center
-                            },
+                            CreateSettingsRowLabel("Show Video Stats"),
                             WithGridColumn(statsOffRadio, 1),
                             WithGridColumn(statsBottomLeftRadio, 2),
                             WithGridColumn(statsBottomRightRadio, 3)
@@ -1878,7 +1875,7 @@ namespace Consolation
                     },
                     new Grid
                     {
-                        ColumnSpacing = 28,
+                        ColumnSpacing = 30,
                         ColumnDefinitions =
                         {
                             new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
@@ -1886,34 +1883,25 @@ namespace Consolation
                         },
                         Children =
                         {
-                            lowFpsSwitch,
-                            WithGridColumn(advancedStatsSwitch, 1)
+                            CreateSettingsToggleRow("Show Low FPS Warnings", lowFpsSwitch),
+                            WithGridColumn(CreateSettingsToggleRow("Show Advanced Video Stats", advancedStatsSwitch), 1)
                         }
                     },
-                    new TextBlock
-                    {
-                        Text = "Video Transformation",
-                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
-                    },
+                    CreateSettingsSectionTitle("Video Transformation"),
                     new Grid
                     {
-                        ColumnSpacing = 16,
+                        ColumnSpacing = 10,
                         ColumnDefinitions =
                         {
-                            new ColumnDefinition { Width = new GridLength(76) },
-                            new ColumnDefinition { Width = new GridLength(128) },
-                            new ColumnDefinition { Width = new GridLength(128) },
-                            new ColumnDefinition { Width = new GridLength(138) },
-                            new ColumnDefinition { Width = new GridLength(138) }
+                            new ColumnDefinition { Width = new GridLength(82) },
+                            new ColumnDefinition { Width = new GridLength(110) },
+                            new ColumnDefinition { Width = new GridLength(110) },
+                            new ColumnDefinition { Width = new GridLength(120) },
+                            new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }
                         },
                         Children =
                         {
-                            new TextBlock
-                            {
-                                Text = "Rotate",
-                                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                                VerticalAlignment = VerticalAlignment.Center
-                            },
+                            CreateSettingsRowLabel("Rotate"),
                             WithGridColumn(rotate0Radio, 1),
                             WithGridColumn(rotate90Radio, 2),
                             WithGridColumn(rotate180Radio, 3),
@@ -1925,26 +1913,68 @@ namespace Consolation
                         ColumnSpacing = 28,
                         ColumnDefinitions =
                         {
-                            new ColumnDefinition { Width = new GridLength(80) },
-                            new ColumnDefinition { Width = new GridLength(180) },
-                            new ColumnDefinition { Width = new GridLength(180) }
+                            new ColumnDefinition { Width = new GridLength(82) },
+                            new ColumnDefinition { Width = new GridLength(245) },
+                            new ColumnDefinition { Width = new GridLength(245) }
                         },
                         Children =
                         {
-                            new TextBlock
-                            {
-                                Text = "Flip",
-                                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                                VerticalAlignment = VerticalAlignment.Center
-                            },
-                            WithGridColumn(flipHorizontalSwitch, 1),
-                            WithGridColumn(flipVerticalSwitch, 2)
+                            CreateSettingsRowLabel("Flip"),
+                            WithGridColumn(CreateSettingsToggleRow("Horizontal", flipHorizontalSwitch), 1),
+                            WithGridColumn(CreateSettingsToggleRow("Vertical", flipVerticalSwitch), 2)
                         }
-                    }
+                    },
+                    CreateDivider()
                 }
             };
 
             return content;
+        }
+
+        private static TextBlock CreateSettingsSectionTitle(string text)
+        {
+            return new TextBlock
+            {
+                Text = text,
+                FontSize = 18,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 255, 255))
+            };
+        }
+
+        private static TextBlock CreateSettingsRowLabel(string text)
+        {
+            return new TextBlock
+            {
+                Text = text,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 255, 255))
+            };
+        }
+
+        private static StackPanel CreateSettingsToggleRow(string label, ToggleSwitch toggleSwitch)
+        {
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 14,
+                VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    CreateSettingsRowLabel(label),
+                    toggleSwitch
+                }
+            };
+        }
+
+        private IEnumerable<UIElement> CreateSettingsActions()
+        {
+            return
+            [
+                CreateModalNavigationButton("Help", () => SetModalContent(CreateDialogTitle("Consolation Help"), CreateHelpContent())),
+                CreateModalNavigationButton("About", () => SetModalContent(CreateAboutTitle(), CreateAboutContent(), CreateAboutActions()))
+            ];
         }
 
         private static T WithGridColumn<T>(T element, int column) where T : FrameworkElement
@@ -1983,13 +2013,29 @@ namespace Consolation
             return ShowCustomModalAsync(CreateDialogTitle(title), content);
         }
 
-        private Task ShowCustomModalAsync(FrameworkElement title, FrameworkElement content)
+        private Task ShowCustomModalAsync(FrameworkElement title, FrameworkElement content, IEnumerable<UIElement>? actions = null)
         {
             _modalCompletionSource = new TaskCompletionSource();
-            ModalTitleHost.Content = title;
-            ModalContentHost.Content = content;
+            SetModalContent(title, content, actions);
             ModalOverlay.Visibility = Visibility.Visible;
             return _modalCompletionSource.Task;
+        }
+
+        private void SetModalContent(FrameworkElement title, FrameworkElement content, IEnumerable<UIElement>? actions = null)
+        {
+            ModalTitleHost.Content = title;
+            ModalContentHost.Content = content;
+            ModalActionsHost.Children.Clear();
+
+            if (actions is null)
+            {
+                return;
+            }
+
+            foreach (UIElement action in actions)
+            {
+                ModalActionsHost.Children.Add(action);
+            }
         }
 
         private void ModalCloseButton_Click(object sender, RoutedEventArgs e)
@@ -1997,8 +2043,38 @@ namespace Consolation
             ModalOverlay.Visibility = Visibility.Collapsed;
             ModalTitleHost.Content = null;
             ModalContentHost.Content = null;
+            ModalActionsHost.Children.Clear();
             _modalCompletionSource?.TrySetResult();
             _modalCompletionSource = null;
+        }
+
+        private static Button CreateModalActionButton(string text, string uri)
+        {
+            Button button = CreateModalFooterButton(text);
+            button.Click += async (_, _) => await Launcher.LaunchUriAsync(new Uri(uri));
+            return button;
+        }
+
+        private static Button CreateModalNavigationButton(string text, Action action)
+        {
+            Button button = CreateModalFooterButton(text);
+            button.Click += (_, _) => action();
+            return button;
+        }
+
+        private static Button CreateModalFooterButton(string text)
+        {
+            return new Button
+            {
+                MinWidth = 104,
+                Height = 44,
+                Padding = new Thickness(22, 0, 22, 0),
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 70, 70, 70)),
+                BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(0, 0, 0, 0)),
+                Content = text,
+                CornerRadius = new CornerRadius(22),
+                Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 255, 255))
+            };
         }
 
         private static StackPanel CreateDialogTitle(string title)
@@ -2013,7 +2089,7 @@ namespace Consolation
                     {
                         Width = 42,
                         Height = 42,
-                        Source = new BitmapImage(new Uri("ms-appx:///Assets/app-icon.png"))
+                        Source = new BitmapImage(new Uri(DialogIconUri))
                     },
                     new TextBlock
                     {

@@ -107,12 +107,17 @@ namespace Consolation
         private bool _isLoadingDevices;
         private bool _isControlsPointerOver;
         private bool _isDraggingControls;
+        private bool _isPanningVideo;
         private bool _isSettingsDialogOpen;
         private bool _isMuted;
         private bool _cursorHidden;
         private bool _screenSaverSuppressed;
         private Point _dragPointerOffset;
+        private Point _panStartPointer;
+        private Point _panStartOffset;
+        private Point _videoPanOffset;
         private double _previousVolume = 70;
+        private double _zoomPercent;
         private long _framesSinceLastStats;
         private int _lowFpsSeconds;
         private double _actualFrameRate;
@@ -973,9 +978,48 @@ namespace Consolation
         {
             if (_isPlaybackActive)
             {
+                if (_isPanningVideo)
+                {
+                    Point pointerPosition = e.GetCurrentPoint(PlaybackViewer).Position;
+                    _videoPanOffset = ClampVideoPanOffset(new Point(
+                        _panStartOffset.X + pointerPosition.X - _panStartPointer.X,
+                        _panStartOffset.Y + pointerPosition.Y - _panStartPointer.Y));
+                    ApplyVideoTransform();
+                    e.Handled = true;
+                }
+
                 ShowMouseCursor();
-                ShowPlaybackControls(restartTimer: true);
+                ShowPlaybackControls(restartTimer: !_isPanningVideo);
             }
+        }
+
+        private void PlaybackViewer_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            PointerPoint pointer = e.GetCurrentPoint(PlaybackViewer);
+            if (!_isPlaybackActive || GetVideoZoomScale() <= 1 || !pointer.Properties.IsLeftButtonPressed)
+            {
+                return;
+            }
+
+            _isPanningVideo = true;
+            _panStartPointer = pointer.Position;
+            _panStartOffset = _videoPanOffset;
+            PlaybackViewer.CapturePointer(e.Pointer);
+            _controlsHideTimer.Stop();
+            e.Handled = true;
+        }
+
+        private void PlaybackViewer_PointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_isPanningVideo)
+            {
+                return;
+            }
+
+            _isPanningVideo = false;
+            PlaybackViewer.ReleasePointerCapture(e.Pointer);
+            StartControlsHideTimer();
+            e.Handled = true;
         }
 
         private void PlaybackControlsBar_PointerEntered(object sender, PointerRoutedEventArgs e)
@@ -1041,6 +1085,7 @@ namespace Consolation
 
         private void CapturePreviewElement_SizeChanged(object sender, SizeChangedEventArgs e)
         {
+            _videoPanOffset = ClampVideoPanOffset(_videoPanOffset);
             ApplyVideoTransform();
         }
 
@@ -1138,6 +1183,13 @@ namespace Consolation
             ApplyAudioGain();
         }
 
+        private void ZoomSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+        {
+            _zoomPercent = Math.Clamp(e.NewValue, 0, 100);
+            _videoPanOffset = ClampVideoPanOffset(_videoPanOffset);
+            ApplyVideoTransform();
+        }
+
         private void UpdateVolumeIcon()
         {
             VolumeButtonIcon.Glyph = _isMuted ? "\uE74F" : "\uE767";
@@ -1216,11 +1268,37 @@ namespace Consolation
 
         private void ApplyVideoTransform()
         {
+            double zoomScale = GetVideoZoomScale();
+            _videoPanOffset = ClampVideoPanOffset(_videoPanOffset);
+
             CapturePreviewTransform.CenterX = CapturePreviewElement.ActualWidth / 2;
             CapturePreviewTransform.CenterY = CapturePreviewElement.ActualHeight / 2;
             CapturePreviewTransform.Rotation = _settings.RotationDegrees;
-            CapturePreviewTransform.ScaleX = _settings.FlipHorizontal ? -1 : 1;
-            CapturePreviewTransform.ScaleY = _settings.FlipVertical ? -1 : 1;
+            CapturePreviewTransform.ScaleX = (_settings.FlipHorizontal ? -1 : 1) * zoomScale;
+            CapturePreviewTransform.ScaleY = (_settings.FlipVertical ? -1 : 1) * zoomScale;
+            CapturePreviewTransform.TranslateX = _videoPanOffset.X;
+            CapturePreviewTransform.TranslateY = _videoPanOffset.Y;
+        }
+
+        private double GetVideoZoomScale()
+        {
+            return 1 + Math.Clamp(_zoomPercent, 0, 200) / 100;
+        }
+
+        private Point ClampVideoPanOffset(Point offset)
+        {
+            double zoomScale = GetVideoZoomScale();
+            if (zoomScale <= 1 || CapturePreviewElement.ActualWidth <= 0 || CapturePreviewElement.ActualHeight <= 0)
+            {
+                return new Point(0, 0);
+            }
+
+            double maxX = CapturePreviewElement.ActualWidth * (zoomScale - 1) / 2;
+            double maxY = CapturePreviewElement.ActualHeight * (zoomScale - 1) / 2;
+
+            return new Point(
+                Math.Clamp(offset.X, -maxX, maxX),
+                Math.Clamp(offset.Y, -maxY, maxY));
         }
 
         private void HideMouseCursor()

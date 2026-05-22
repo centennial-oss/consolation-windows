@@ -161,6 +161,22 @@
 
                         <Border Height="1" Background="#33FFFFFF" />
 
+                        <StackPanel
+                            x:Name="PermissionNoticePanel"
+                            Spacing="24"
+                            Visibility="Collapsed">
+                            <TextBlock
+                                MaxWidth="520"
+                                HorizontalAlignment="Center"
+                                FontSize="16"
+                                FontWeight="SemiBold"
+                                Foreground="#FF666666"
+                                Text="You will be asked to allow Camera and Microphone access, which is required because Windows treats Capture Cards as Webcams."
+                                TextAlignment="Center"
+                                TextWrapping="Wrap" />
+                            <Border Height="1" Background="#33FFFFFF" />
+                        </StackPanel>
+
                         <Grid ColumnSpacing="24" RowSpacing="28">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="220" />

@@ -100,6 +100,8 @@ namespace Consolation
         private AudioGraph? _audioGraph;
         private AudioDeviceInputNode? _audioInputNode;
         private AudioDeviceOutputNode? _audioOutputNode;
+        private DeviceAccessInformation? _cameraAccessInformation;
+        private DeviceAccessInformation? _microphoneAccessInformation;
         private readonly List<CaptureDeviceOption> _captureDevices = [];
         private CaptureDeviceOption? _selectedDevice;
         private VideoModeOption? _selectedVideoMode;
@@ -129,6 +131,7 @@ namespace Consolation
 
             ExtendsContentIntoTitleBar = true;
             MaximizeWindow();
+            InitializePermissionNotice();
             _controlsHideTimer.Tick += ControlsHideTimer_Tick;
             _statsTimer.Tick += StatsTimer_Tick;
             _ = InitializeCaptureDevicesAsync();
@@ -187,6 +190,32 @@ namespace Consolation
             {
                 _settingsSaveLock.Release();
             }
+        }
+
+        private void InitializePermissionNotice()
+        {
+            _cameraAccessInformation = DeviceAccessInformation.CreateFromDeviceClass(DeviceClass.VideoCapture);
+            _microphoneAccessInformation = DeviceAccessInformation.CreateFromDeviceClass(DeviceClass.AudioCapture);
+
+            _cameraAccessInformation.AccessChanged += DeviceAccessInformation_AccessChanged;
+            _microphoneAccessInformation.AccessChanged += DeviceAccessInformation_AccessChanged;
+
+            UpdatePermissionNotice();
+        }
+
+        private void DeviceAccessInformation_AccessChanged(DeviceAccessInformation sender, DeviceAccessChangedEventArgs args)
+        {
+            _ = DispatcherQueue.TryEnqueue(UpdatePermissionNotice);
+        }
+
+        private void UpdatePermissionNotice()
+        {
+            bool cameraAllowed = _cameraAccessInformation?.CurrentStatus == DeviceAccessStatus.Allowed;
+            bool microphoneAllowed = _microphoneAccessInformation?.CurrentStatus == DeviceAccessStatus.Allowed;
+
+            PermissionNoticePanel.Visibility = cameraAllowed && microphoneAllowed
+                ? Visibility.Collapsed
+                : Visibility.Visible;
         }
 
         private async Task InitializeCaptureDevicesAsync()

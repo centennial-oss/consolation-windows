@@ -12,16 +12,9 @@
     <UseWinUI>true</UseWinUI>
     <WinUISDKReferences>false</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
     <Nullable>enable</Nullable>
   </PropertyGroup>
-  <ItemGroup>
-    <Content Remove="Assets\BadgeLogo.scale-100.png" />
-    <Content Remove="Assets\BadgeLogo.scale-125.png" />
-    <Content Remove="Assets\BadgeLogo.scale-150.png" />
-    <Content Remove="Assets\BadgeLogo.scale-200.png" />
-    <Content Remove="Assets\BadgeLogo.scale-400.png" />
-  </ItemGroup>
-
   <ItemGroup>
     <Content Include="Assets\SplashScreen.scale-200.png" />
     <Content Include="Assets\LockScreenLogo.scale-200.png" />

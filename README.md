@@ -3,7 +3,7 @@
 
 A 100% free, no-frills, incredibly performant video capture viewer for Windows with no analytics or snooping.
 
-Consolation is coming soon to the Windows Store. It can be downloaded directly from [this project's releases](https://github.com/centennial-oss/consolation-win64/releases).
+Consolation is coming soon to the Microsoft Store. We do not provide releases on GitHub due to the cost-prohibitive nature of code signing certs. If you do not use the Microsoft Store, clone the project and build with Visual Studio.
 
 ## About
 

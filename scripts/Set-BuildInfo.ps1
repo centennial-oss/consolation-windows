@@ -21,7 +21,7 @@ namespace Consolation
         public const string Architecture = "$Architecture";
 
         public static string CopyableBlob =>
-            `$"Version: {Version} (Windows, {Architecture})\n" +
+            `$"Version: {Version} ({Architecture})\n" +
             `$"Build Type: {BuildType}\n" +
             `$"Date: {BuildDate}\n" +
             `$"Commit: {CommitId}";

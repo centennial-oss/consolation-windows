@@ -3,8 +3,12 @@ PROJECT := Consolation/Consolation.csproj
 BUILD_INFO := Consolation/BuildInfo.cs
 PACKAGE_MANIFEST := Consolation/Package.appxmanifest
 RELEASE_VERSION ?= localdev
+ifeq ($(RELEASE_VERSION),localdev)
+MSIX_VERSION ?= 1.0.0.0
+else
 MSIX_VERSION ?= $(RELEASE_VERSION).0
-BUILD_DATE := $(shell powershell -NoProfile -Command "Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ss.fffZ'")
+endif
+BUILD_DATE := $(shell powershell -NoProfile -Command "[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')")
 GIT_COMMIT := $(shell powershell -NoProfile -Command "if (Get-Command git -ErrorAction SilentlyContinue) { git rev-parse HEAD } else { 'localdev' }")
 DOTNET := dotnet
 MSBUILD_RELEASE_PROPS := -c Release -p:AppxPackageSigningEnabled=false -p:GenerateAppxPackageOnBuild=true -p:AppxBundle=Never -p:AppxPackageVersion=$(MSIX_VERSION)

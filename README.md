@@ -13,7 +13,12 @@ The app is intentionally simple: watch the live video on your computer. No recor
 
 ## Screenshots
 
-Coming Soon.
+<img src="assets/screenshots/cons-win-main-screen.png" alt="start screen" width="270" /> <img src="assets/screenshots/cons-win-settings.png" alt="settings sheet" width="270" /> <img src="assets/screenshots/cons-win-rpi1.png" alt="raspeberry pi via consolation" width="270" />
+
+<img src="assets/screenshots/cons-win-mac1.png" alt="mac via consolation" width="270" /> <img src="assets/screenshots/cons-win-console2.png" alt="Nintendo Switch capture" width="270" /> <img src="assets/screenshots/cons-win-console1.png" alt="Nintendo Switch capture" width="270" />
+
+<img src="assets/screenshots/cons-win-console3.png" alt="macOS menu bar" width="270" /> <img src="assets/screenshots/cons-win-console4.png" alt="macOS Raspberry Pi capture" width="270" />
+
 
 ## Privacy
 

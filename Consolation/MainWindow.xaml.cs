@@ -115,7 +115,6 @@ namespace Consolation
         private bool _isPanningVideo;
         private bool _isSettingsDialogOpen;
         private bool _isMuted;
-        private bool _cursorHidden;
         private bool _screenSaverSuppressed;
         private Point _dragPointerOffset;
         private Point _panStartPointer;
@@ -985,7 +984,6 @@ namespace Consolation
             LowFpsWarningButton.Visibility = Visibility.Collapsed;
             VideoStatsOverlay.Visibility = Visibility.Collapsed;
             ShowWindowChrome();
-            ShowMouseCursor();
             RestoreScreenSaver();
             StopAudio();
 
@@ -1028,7 +1026,6 @@ namespace Consolation
                     e.Handled = true;
                 }
 
-                ShowMouseCursor();
                 ShowPlaybackControls(restartTimer: !_isPanningVideo);
             }
         }
@@ -1180,7 +1177,6 @@ namespace Consolation
             {
                 PlaybackControlsBar.Visibility = Visibility.Collapsed;
                 HideWindowChrome();
-                HideMouseCursor();
             }
         }
 
@@ -1341,34 +1337,6 @@ namespace Consolation
                 Math.Clamp(offset.Y, -maxY, maxY));
         }
 
-        private void HideMouseCursor()
-        {
-            if (_cursorHidden)
-            {
-                return;
-            }
-
-            while (ShowCursor(false) >= 0)
-            {
-            }
-
-            _cursorHidden = true;
-        }
-
-        private void ShowMouseCursor()
-        {
-            if (!_cursorHidden)
-            {
-                return;
-            }
-
-            while (ShowCursor(true) < 0)
-            {
-            }
-
-            _cursorHidden = false;
-        }
-
         private void SuppressScreenSaver()
         {
             SetThreadExecutionState(
@@ -1430,7 +1398,6 @@ namespace Consolation
         {
             _isSettingsDialogOpen = true;
             _controlsHideTimer.Stop();
-            ShowMouseCursor();
             ShowPlaybackControls(restartTimer: false);
 
             await ShowCustomModalAsync(CreateDialogTitle("Settings"), CreateSettingsContent(), CreateSettingsActions());
@@ -2167,9 +2134,6 @@ namespace Consolation
             string fourCc = new(chars);
             return PixelFormatAliases.TryGetValue(fourCc, out string? alias) ? alias : null;
         }
-
-        [DllImport("user32.dll")]
-        private static extern int ShowCursor(bool show);
 
         [DllImport("kernel32.dll")]
         private static extern ExecutionState SetThreadExecutionState(ExecutionState esFlags);

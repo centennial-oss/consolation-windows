@@ -1,9 +1,8 @@
-# <img src="assets/app-icon.png" alt="Consolation" height="48" /> Consolation™
-
+# <img src="assets/app-icon.png" alt="Consolation" height="48" /> Consolation™ [<img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" align="right"/>](https://get.microsoft.com/installer/download/9N96T6XGBFTF?referrer=appbadge)
 
 A 100% free, no-frills, incredibly performant video capture viewer for Windows with no analytics or snooping.
 
-Consolation is coming soon to the Microsoft Store. We do not provide releases on GitHub due to the cost-prohibitive nature of code signing certs. If you do not use the Microsoft Store, clone the project and build with Visual Studio.
+Consolation is [available on the Microsoft Store](https://apps.microsoft.com/detail/9N96T6XGBFTF?hl=en-us&gl=US). We do not provide releases on GitHub due to the cost-prohibitive nature of code signing certs. If you do not use the Microsoft Store, clone the project and build with Visual Studio.
 
 ## About
 

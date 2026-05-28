@@ -4,6 +4,9 @@ A 100% free, no-frills, incredibly performant video capture viewer for Windows w
 
 Consolation is [available on the Microsoft Store](https://apps.microsoft.com/detail/9N96T6XGBFTF?hl=en-us&gl=US). We do not provide releases on GitHub due to the cost-prohibitive nature of code signing certs. If you do not use the Microsoft Store, clone the project and build with Visual Studio.
 
+Consolation is also availble for Apple devices ([GitHub](https://github.com/centennial-oss/consolation-apple) | [App Store](https://apps.apple.com/us/app/consolation/id1563856788)), Android Tablets ([GitHub](https://github.com/centennial-oss/consolation-android) | [Play Store](https://play.google.com/store/apps/details?id=org.centennialoss.consolation)) and Linux ([GitHub](https://github.com/centennial-oss/consolation-linux)).
+
+
 ## About
 
 Consolation is a free app that enables your Windows computer to be used as a display for devices like gaming consoles, Raspberry Pis, and even a Mac mini or other PC, via a standard USB Video Class (UVC) video capture card.

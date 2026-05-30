@@ -765,7 +765,7 @@ namespace Consolation
                 _mediaPlayer.MediaFailed += MediaPlayer_MediaFailed;
                 CapturePreviewElement.SetMediaPlayer(_mediaPlayer);
                 _mediaPlayer.Play();
-                await StartStatsReaderAsync();
+                await SyncStatsReaderStateAsync();
                 await StartAudioAsync(_selectedDevice.AudioDeviceId);
                 ConnectingOverlay.Visibility = Visibility.Collapsed;
             }
@@ -864,9 +864,34 @@ namespace Consolation
                 : format.FrameRate.Numerator / (double)format.FrameRate.Denominator;
         }
 
+        // The stats reader is a second consumer of the capture frame source, which adds
+        // memory-bandwidth and per-frame overhead to the render path. Only run it when its
+        // output (the stats overlay or the low-FPS warning) is actually in use.
+        private bool IsStatsReaderNeeded()
+        {
+            return _settings.VideoStatsPosition != "Off" || _settings.ShowLowFpsWarnings;
+        }
+
+        private async Task SyncStatsReaderStateAsync()
+        {
+            if (!_isPlaybackActive)
+            {
+                return;
+            }
+
+            if (IsStatsReaderNeeded())
+            {
+                await StartStatsReaderAsync();
+            }
+            else
+            {
+                await StopStatsReaderAsync();
+            }
+        }
+
         private async Task StartStatsReaderAsync()
         {
-            if (_mediaCapture is null || _previewFrameSource is null)
+            if (_mediaCapture is null || _previewFrameSource is null || _statsFrameReader is not null)
             {
                 return;
             }
@@ -876,6 +901,20 @@ namespace Consolation
             _statsFrameReader.FrameArrived += StatsFrameReader_FrameArrived;
             await _statsFrameReader.StartAsync();
             _statsTimer.Start();
+        }
+
+        private async Task StopStatsReaderAsync()
+        {
+            MediaFrameReader? statsReader = _statsFrameReader;
+            _statsFrameReader = null;
+            _statsTimer.Stop();
+
+            if (statsReader is not null)
+            {
+                statsReader.FrameArrived -= StatsFrameReader_FrameArrived;
+                await statsReader.StopAsync();
+                statsReader.Dispose();
+            }
         }
 
         private void StatsFrameReader_FrameArrived(MediaFrameReader sender, MediaFrameArrivedEventArgs args)
@@ -974,27 +1013,19 @@ namespace Consolation
 
         private async Task StopPlaybackAsync()
         {
+            await StopStatsReaderAsync();
+
             MediaPlayer? player = _mediaPlayer;
             MediaCapture? capture = _mediaCapture;
-            MediaFrameReader? statsReader = _statsFrameReader;
-            _statsFrameReader = null;
             _mediaPlayer = null;
             _mediaCapture = null;
             _previewFrameSource = null;
             _activeVideoFormat = null;
-            _statsTimer.Stop();
             LowFpsWarningButton.Visibility = Visibility.Collapsed;
             VideoStatsOverlay.Visibility = Visibility.Collapsed;
             ShowWindowChrome();
             RestoreScreenSaver();
             StopAudio();
-
-            if (statsReader is not null)
-            {
-                statsReader.FrameArrived -= StatsFrameReader_FrameArrived;
-                await statsReader.StopAsync();
-                statsReader.Dispose();
-            }
 
             if (player is not null)
             {
@@ -1728,6 +1759,7 @@ namespace Consolation
                 _settings.VideoStatsPosition = "Off";
                 ApplyStatsOverlayPosition();
                 UpdateVideoStatsOverlay();
+                await SyncStatsReaderStateAsync();
                 await SaveSettingsAsync();
             };
 
@@ -1742,6 +1774,7 @@ namespace Consolation
                 _settings.VideoStatsPosition = "BottomLeft";
                 ApplyStatsOverlayPosition();
                 UpdateVideoStatsOverlay();
+                await SyncStatsReaderStateAsync();
                 await SaveSettingsAsync();
             };
 
@@ -1756,6 +1789,7 @@ namespace Consolation
                 _settings.VideoStatsPosition = "BottomRight";
                 ApplyStatsOverlayPosition();
                 UpdateVideoStatsOverlay();
+                await SyncStatsReaderStateAsync();
                 await SaveSettingsAsync();
             };
 
@@ -1769,6 +1803,7 @@ namespace Consolation
             {
                 _settings.ShowLowFpsWarnings = lowFpsSwitch.IsOn;
                 UpdateLowFpsWarning();
+                await SyncStatsReaderStateAsync();
                 await SaveSettingsAsync();
             };
 

@@ -122,7 +122,10 @@ namespace Consolation
         private bool _isPanningVideo;
         private bool _isSettingsDialogOpen;
         private bool _isMuted;
+        private bool _isFullScreen;
         private bool _screenSaverSuppressed;
+        private static readonly SolidColorBrush FullScreenActiveBrush = new(Windows.UI.Color.FromArgb(255, 0xCC, 0x11, 0xBB));
+        private static readonly SolidColorBrush FullScreenInactiveBrush = new(Windows.UI.Color.FromArgb(255, 255, 255, 255));
         private Point _dragPointerOffset;
         private Point _panStartPointer;
         private Point _panStartOffset;
@@ -144,6 +147,8 @@ namespace Consolation
             InitializePermissionNotice();
             _controlsHideTimer.Tick += ControlsHideTimer_Tick;
             _statsTimer.Tick += StatsTimer_Tick;
+            RootGrid.IsTabStop = true;
+            RootGrid.KeyDown += RootGrid_KeyDown;
             _ = InitializeCaptureDevicesAsync();
         }
 
@@ -766,13 +771,23 @@ namespace Consolation
 
         private OverlappedPresenter? GetOverlappedPresenter()
         {
+            return GetAppWindow()?.Presenter as OverlappedPresenter;
+        }
+
+        private AppWindow? GetAppWindow()
+        {
             IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
             WindowId windowId = Win32Interop.GetWindowIdFromWindow(windowHandle);
-            return AppWindow.GetFromWindowId(windowId)?.Presenter as OverlappedPresenter;
+            return AppWindow.GetFromWindowId(windowId);
         }
 
         private void ShowWindowChrome()
         {
+            if (_isFullScreen)
+            {
+                return;
+            }
+
             if (GetOverlappedPresenter() is OverlappedPresenter presenter)
             {
                 presenter.SetBorderAndTitleBar(true, true);
@@ -783,10 +798,94 @@ namespace Consolation
 
         private void HideWindowChrome()
         {
+            if (_isFullScreen)
+            {
+                return;
+            }
+
             if (GetOverlappedPresenter() is OverlappedPresenter presenter)
             {
                 presenter.SetBorderAndTitleBar(false, false);
             }
+        }
+
+        private void FullScreenButton_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleFullScreen();
+            ShowPlaybackControls(restartTimer: true);
+        }
+
+        private void RootGrid_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            if (e.Key == VirtualKey.Escape)
+            {
+                if (_isFullScreen)
+                {
+                    ExitFullScreen();
+                    e.Handled = true;
+                }
+
+                return;
+            }
+
+            if (e.Key == VirtualKey.F11 && _isPlaybackActive)
+            {
+                ToggleFullScreen();
+                ShowPlaybackControls(restartTimer: true);
+                e.Handled = true;
+            }
+        }
+
+        private void ToggleFullScreen()
+        {
+            if (_isFullScreen)
+            {
+                ExitFullScreen();
+            }
+            else
+            {
+                EnterFullScreen();
+            }
+        }
+
+        private void EnterFullScreen()
+        {
+            if (_isFullScreen)
+            {
+                return;
+            }
+
+            _isFullScreen = true;
+            GetAppWindow()?.SetPresenter(AppWindowPresenterKind.FullScreen);
+            UpdateFullScreenButton();
+        }
+
+        private void ExitFullScreen()
+        {
+            if (!_isFullScreen)
+            {
+                return;
+            }
+
+            _isFullScreen = false;
+            GetAppWindow()?.SetPresenter(AppWindowPresenterKind.Default);
+            MaximizeWindow();
+            UpdateFullScreenButton();
+
+            if (PlaybackControlsBar.Visibility == Visibility.Visible)
+            {
+                ShowWindowChrome();
+            }
+            else
+            {
+                HideWindowChrome();
+            }
+        }
+
+        private void UpdateFullScreenButton()
+        {
+            FullScreenButtonIcon.Glyph = _isFullScreen ? "\uE73F" : "\uE740";
+            FullScreenButtonIcon.Foreground = _isFullScreen ? FullScreenActiveBrush : FullScreenInactiveBrush;
         }
 
         private async void PlayButton_Click(object sender, RoutedEventArgs e)
@@ -798,6 +897,7 @@ namespace Consolation
 
             _isPlaybackActive = true;
             SuppressScreenSaver();
+            RootGrid.Focus(FocusState.Programmatic);
             StartupForm.Visibility = Visibility.Collapsed;
             PlaybackViewer.Visibility = Visibility.Visible;
             ConnectingOverlay.Visibility = Visibility.Visible;
@@ -1061,6 +1161,12 @@ namespace Consolation
             _statsTimer.Stop();
             LowFpsWarningButton.Visibility = Visibility.Collapsed;
             VideoStatsOverlay.Visibility = Visibility.Collapsed;
+
+            if (_isFullScreen)
+            {
+                ExitFullScreen();
+            }
+
             ShowWindowChrome();
             RestoreScreenSaver();
             StopAudio();

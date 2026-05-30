@@ -2,7 +2,7 @@
 
 A 100% free, no-frills, incredibly performant video capture viewer for Windows with no analytics or snooping.
 
-Consolation is [available on the Microsoft Store](https://apps.microsoft.com/detail/9N96T6XGBFTF?hl=en-us&gl=US). We do not provide releases on GitHub due to the cost-prohibitive nature of code signing certs. If you do not use the Microsoft Store, clone the project and build with Visual Studio.
+Consolation is [available on the Microsoft Store](https://apps.microsoft.com/detail/9N96T6XGBFTF?hl=en-us&gl=US). We do not provide installers on GitHub due to the cost-prohibitive nature of code signing certs. If you do not use the Microsoft Store, clone the project and build with Visual Studio.
 
 Consolation is also available for Apple devices ([GitHub](https://github.com/centennial-oss/consolation-apple) | [App Store](https://apps.apple.com/us/app/consolation/id1563856788)), Android tablets ([GitHub](https://github.com/centennial-oss/consolation-android) | [Play Store](https://play.google.com/store/apps/details?id=org.centennialoss.consolation)) and Linux ([GitHub](https://github.com/centennial-oss/consolation-linux)).
 

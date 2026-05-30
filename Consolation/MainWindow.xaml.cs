@@ -760,6 +760,8 @@ namespace Consolation
                     RealTimePlayback = true,
                     Source = MediaSource.CreateFromMediaFrameSource(_previewFrameSource)
                 };
+
+                _mediaPlayer.CommandManager.IsEnabled = false;
                 _mediaPlayer.MediaFailed += MediaPlayer_MediaFailed;
                 CapturePreviewElement.SetMediaPlayer(_mediaPlayer);
                 _mediaPlayer.Play();

@@ -124,6 +124,7 @@ namespace Consolation
         private bool _isSettingsDialogOpen;
         private bool _isMuted;
         private bool _isFullScreen;
+        private bool _wasMaximizedBeforeFullScreen;
         private bool _screenSaverSuppressed;
         private static readonly SolidColorBrush FullScreenActiveBrush = new(Windows.UI.Color.FromArgb(255, 0xCC, 0x11, 0xBB));
         private static readonly SolidColorBrush FullScreenInactiveBrush = new(Windows.UI.Color.FromArgb(255, 255, 255, 255));
@@ -856,6 +857,7 @@ namespace Consolation
                 return;
             }
 
+            _wasMaximizedBeforeFullScreen = GetOverlappedPresenter()?.State == OverlappedPresenterState.Maximized;
             _isFullScreen = true;
             GetAppWindow()?.SetPresenter(AppWindowPresenterKind.FullScreen);
             UpdateFullScreenButton();
@@ -871,7 +873,7 @@ namespace Consolation
             _isFullScreen = false;
             GetAppWindow()?.SetPresenter(AppWindowPresenterKind.Default);
 
-            if (restoreMaximized)
+            if (restoreMaximized && _wasMaximizedBeforeFullScreen)
             {
                 MaximizeWindow();
             }

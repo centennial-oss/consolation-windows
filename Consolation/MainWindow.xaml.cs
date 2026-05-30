@@ -1553,7 +1553,7 @@ namespace Consolation
                         TextWrapping = TextWrapping.Wrap
                     },
                     CreateDivider(),
-                    CreateInfoRow("\uE714", "Consolation is a USB Capture Card utility for viewing gaming consoles, Raspberry Pis, and other HDMI devices on a Windows PC.", iconOnly: true),
+                    CreateInfoRow("\uF7EE", "Consolation is a USB Capture Card utility for viewing gaming consoles, Raspberry Pis, and other HDMI devices on a Windows PC.", iconOnly: true),
                     CreateInfoRow("\uE7BA", "External USB Video Class (UVC) capture hardware is required.", iconOnly: true),
                     CreateInfoRow("\uEA18", "Consolation is 100% private. It does not collect analytics or snoop on your usage. Nothing ever leaves your device. Period.", iconOnly: true),
                     CreateInfoRow("\uEB51", "This software is completely free and open source for you to enjoy.", iconOnly: true),

@@ -919,11 +919,7 @@ namespace Consolation
 
         private void StatsFrameReader_FrameArrived(MediaFrameReader sender, MediaFrameArrivedEventArgs args)
         {
-            using MediaFrameReference? frame = sender.TryAcquireLatestFrame();
-            if (frame is not null)
-            {
-                Interlocked.Increment(ref _framesSinceLastStats);
-            }
+            Interlocked.Increment(ref _framesSinceLastStats);
         }
 
         private async Task StartAudioAsync(string? audioDeviceId)

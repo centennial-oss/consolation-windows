@@ -366,6 +366,19 @@
                         Fill="#33FFFFFF" />
 
                     <Button
+                        Style="{StaticResource RoundIconButtonStyle}"
+                        ToolTipService.ToolTip="Resize window">
+                        <Button.Flyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Click="ResizeWindowToHalf_Click" Text="Resize Window to 0.5x" />
+                                <MenuFlyoutItem Click="ResizeWindowToSingle_Click" Text="Resize Window to 1x" />
+                                <MenuFlyoutItem Click="ResizeWindowToOneAndHalf_Click" Text="Resize Window to 1.5x" />
+                            </MenuFlyout>
+                        </Button.Flyout>
+                        <FontIcon FontSize="17" Glyph="&#xE737;" />
+                    </Button>
+
+                    <Button
                         x:Name="FullScreenButton"
                         Click="FullScreenButton_Click"
                         Style="{StaticResource RoundIconButtonStyle}"

@@ -20,6 +20,7 @@ using Windows.ApplicationModel;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Devices.Enumeration;
 using Windows.Foundation;
+using Windows.Graphics;
 using Windows.Media;
 using Windows.Media.Audio;
 using Windows.Media.Capture;
@@ -860,7 +861,7 @@ namespace Consolation
             UpdateFullScreenButton();
         }
 
-        private void ExitFullScreen()
+        private void ExitFullScreen(bool restoreMaximized = true)
         {
             if (!_isFullScreen)
             {
@@ -869,7 +870,12 @@ namespace Consolation
 
             _isFullScreen = false;
             GetAppWindow()?.SetPresenter(AppWindowPresenterKind.Default);
-            MaximizeWindow();
+
+            if (restoreMaximized)
+            {
+                MaximizeWindow();
+            }
+
             UpdateFullScreenButton();
 
             if (PlaybackControlsBar.Visibility == Visibility.Visible)
@@ -886,6 +892,104 @@ namespace Consolation
         {
             FullScreenButtonIcon.Glyph = _isFullScreen ? "\uE73F" : "\uE740";
             FullScreenButtonIcon.Foreground = _isFullScreen ? FullScreenActiveBrush : FullScreenInactiveBrush;
+        }
+
+        private void ResizeWindowToHalf_Click(object sender, RoutedEventArgs e) => ApplyPlaybackWindowResize(0.5);
+
+        private void ResizeWindowToSingle_Click(object sender, RoutedEventArgs e) => ApplyPlaybackWindowResize(1.0);
+
+        private void ResizeWindowToOneAndHalf_Click(object sender, RoutedEventArgs e) => ApplyPlaybackWindowResize(1.5);
+
+        private void ApplyPlaybackWindowResize(double scaleMultiplier)
+        {
+            if (!_isPlaybackActive || !TryGetActiveVideoDimensions(out uint videoWidth, out uint videoHeight))
+            {
+                return;
+            }
+
+            if (_isFullScreen)
+            {
+                ExitFullScreen(restoreMaximized: false);
+            }
+
+            AppWindow? appWindow = GetAppWindow();
+            if (appWindow is null)
+            {
+                return;
+            }
+
+            if (GetOverlappedPresenter() is OverlappedPresenter presenter)
+            {
+                if (presenter.State == OverlappedPresenterState.Maximized)
+                {
+                    presenter.Restore();
+                }
+
+                presenter.SetBorderAndTitleBar(false, false);
+            }
+
+            ExtendsContentIntoTitleBar = true;
+
+            IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            WindowId windowId = Win32Interop.GetWindowIdFromWindow(windowHandle);
+            DisplayArea displayArea = DisplayArea.GetFromWindowId(windowId, DisplayAreaFallback.Nearest);
+            RectInt32 workArea = displayArea.WorkArea;
+            double dpiScale = RootGrid.XamlRoot.RasterizationScale;
+
+            int targetWidth = (int)Math.Round(videoWidth * scaleMultiplier * dpiScale);
+            int targetHeight = (int)Math.Round(videoHeight * scaleMultiplier * dpiScale);
+
+            if (targetWidth > workArea.Width || targetHeight > workArea.Height)
+            {
+                double fitRatio = Math.Min(
+                    (double)workArea.Width / targetWidth,
+                    (double)workArea.Height / targetHeight);
+                targetWidth = Math.Max(1, (int)Math.Floor(targetWidth * fitRatio));
+                targetHeight = Math.Max(1, (int)Math.Floor(targetHeight * fitRatio));
+            }
+
+            int x = workArea.X + (workArea.Width - targetWidth) / 2;
+            int y = workArea.Y + (workArea.Height - targetHeight) / 2;
+
+            x = Math.Max(workArea.X, x);
+            y = Math.Max(workArea.Y, y);
+
+            if (x + targetWidth > workArea.X + workArea.Width)
+            {
+                x = workArea.X + workArea.Width - targetWidth;
+            }
+
+            if (y + targetHeight > workArea.Y + workArea.Height)
+            {
+                y = workArea.Y + workArea.Height - targetHeight;
+            }
+
+            x = Math.Max(workArea.X, x);
+            y = Math.Max(workArea.Y, y);
+
+            appWindow.MoveAndResize(new RectInt32(x, y, targetWidth, targetHeight));
+            ShowPlaybackControls(restartTimer: true);
+        }
+
+        private bool TryGetActiveVideoDimensions(out uint width, out uint height)
+        {
+            if (_activeVideoFormat?.VideoFormat is { Width: > 0, Height: > 0 } activeFormat)
+            {
+                width = activeFormat.Width;
+                height = activeFormat.Height;
+                return true;
+            }
+
+            if (_selectedVideoMode is { Width: > 0, Height: > 0 } selectedMode)
+            {
+                width = selectedMode.Width;
+                height = selectedMode.Height;
+                return true;
+            }
+
+            width = 0;
+            height = 0;
+            return false;
         }
 
         private async void PlayButton_Click(object sender, RoutedEventArgs e)

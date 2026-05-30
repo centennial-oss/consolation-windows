@@ -20,6 +20,7 @@ using Windows.ApplicationModel;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Devices.Enumeration;
 using Windows.Foundation;
+using Windows.Graphics;
 using Windows.Media;
 using Windows.Media.Audio;
 using Windows.Media.Capture;
@@ -81,6 +82,13 @@ namespace Consolation
             ["YVYU"] = "YVYU"
         };
 
+        private static readonly HashSet<string> ExcludedPreviewPixelFormats = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // MJPEG presents as black screen. WMF provides virtual NV12 option for MJPEG already decoded
+            "MJPEG",
+            "MJPG"
+        };
+
         private readonly DispatcherTimer _controlsHideTimer = new()
         {
             Interval = TimeSpan.FromSeconds(3)
@@ -115,7 +123,10 @@ namespace Consolation
         private bool _isPanningVideo;
         private bool _isSettingsDialogOpen;
         private bool _isMuted;
+        private bool _isFullScreen;
         private bool _screenSaverSuppressed;
+        private static readonly SolidColorBrush FullScreenActiveBrush = new(Windows.UI.Color.FromArgb(255, 0xCC, 0x11, 0xBB));
+        private static readonly SolidColorBrush FullScreenInactiveBrush = new(Windows.UI.Color.FromArgb(255, 255, 255, 255));
         private Point _dragPointerOffset;
         private Point _panStartPointer;
         private Point _panStartOffset;
@@ -137,6 +148,8 @@ namespace Consolation
             InitializePermissionNotice();
             _controlsHideTimer.Tick += ControlsHideTimer_Tick;
             _statsTimer.Tick += StatsTimer_Tick;
+            RootGrid.IsTabStop = true;
+            RootGrid.KeyDown += RootGrid_KeyDown;
             _ = InitializeCaptureDevicesAsync();
         }
 
@@ -315,23 +328,7 @@ namespace Consolation
                 probeCapture = new MediaCapture();
                 await probeCapture.InitializeAsync(CreateMediaCaptureSettings(device.Id, MediaCaptureSharingMode.SharedReadOnly));
 
-                IReadOnlyList<IMediaEncodingProperties> previewProperties =
-                    probeCapture.VideoDeviceController.GetAvailableMediaStreamProperties(MediaStreamType.VideoPreview);
-
-                List<VideoModeOption> videoModes = previewProperties
-                    .OfType<VideoEncodingProperties>()
-                    .Where(properties => properties.Width > 0 && properties.Height > 0 && properties.FrameRate.Denominator > 0)
-                    .Select(VideoModeOption.FromProperties)
-                    .Where(mode => mode is not null)
-                    .Select(mode => mode!)
-                    .GroupBy(mode => mode.SettingsKey, StringComparer.OrdinalIgnoreCase)
-                    .Select(group => group.OrderBy(mode => FormatRank(mode.PixelFormat)).First())
-                    .OrderBy(mode => ResolutionCohortRank(mode.Width, mode.Height))
-                    .ThenByDescending(mode => mode.Width)
-                    .ThenByDescending(mode => mode.Height)
-                    .ThenByDescending(mode => mode.FrameRate)
-                    .ThenBy(mode => FormatRank(mode.PixelFormat))
-                    .ToList();
+                List<VideoModeOption> videoModes = EnumeratePlayableVideoModes(probeCapture);
 
                 string? audioDeviceId = await FindPairedAudioDeviceIdAsync(device);
                 int deviceSelectionScore = ScoreCaptureCardLikelihood(device, audioDeviceId is not null, videoModes);
@@ -443,7 +440,7 @@ namespace Consolation
                 score += 16;
             }
 
-            if (videoModes.Any(mode => NormalizePixelFormat(mode.PixelFormat) is "MJPEG" or "YUY2" or "NV12"))
+            if (videoModes.Any(mode => NormalizePixelFormat(mode.PixelFormat) is "YUY2" or "NV12"))
             {
                 score += 6;
             }
@@ -571,13 +568,95 @@ namespace Consolation
             return normalized switch
             {
                 "NV12" => 0,
-                "YUY2" or "YUYV" => 1,
-                "UYVY" => 2,
-                "I420" or "IYUV" or "YV12" => 3,
+                "I420" or "IYUV" or "YV12" => 1,
+                "YUY2" or "YUYV" => 2,
+                "UYVY" => 3,
                 "RGB24" or "RGB32" or "ARGB32" or "BGRA8" => 4,
-                "MJPEG" or "MJPG" => 20,
                 _ => 10
             };
+        }
+
+        private static List<VideoModeOption> EnumeratePlayableVideoModes(MediaCapture mediaCapture)
+        {
+            HashSet<string> wmfSupportedSettingsKeys = BuildWmfSupportedSettingsKeys(mediaCapture);
+
+            IReadOnlyList<IMediaEncodingProperties> previewProperties =
+                mediaCapture.VideoDeviceController.GetAvailableMediaStreamProperties(MediaStreamType.VideoPreview);
+
+            return DedupeAndSortVideoModes(previewProperties
+                .OfType<VideoEncodingProperties>()
+                .Where(properties => properties.Width > 0 && properties.Height > 0 && properties.FrameRate.Denominator > 0)
+                .Select(VideoModeOption.FromProperties)
+                .Where(mode => mode is not null)
+                .Select(mode => mode!)
+                .Where(mode => mode.FrameRate > 0)
+                .Where(mode => !IsExcludedPreviewFormat(mode.PixelFormat))
+                .Where(mode => wmfSupportedSettingsKeys.Contains(mode.SettingsKey)));
+        }
+
+        private static HashSet<string> BuildWmfSupportedSettingsKeys(MediaCapture mediaCapture)
+        {
+            HashSet<string> settingsKeys = new(StringComparer.OrdinalIgnoreCase);
+
+            foreach (MediaFrameFormat format in EnumerateWmfSupportedFormats(mediaCapture))
+            {
+                if (format.VideoFormat is null)
+                {
+                    continue;
+                }
+
+                string? pixelFormat = TryRecognizePixelFormat(format.Subtype);
+                if (pixelFormat is null || IsExcludedPreviewFormat(pixelFormat))
+                {
+                    continue;
+                }
+
+                double frameRate = GetFrameRate(format);
+                if (frameRate <= 0)
+                {
+                    continue;
+                }
+
+                settingsKeys.Add(CreateVideoModeSettingsKey(
+                    format.VideoFormat.Width,
+                    format.VideoFormat.Height,
+                    frameRate,
+                    pixelFormat));
+            }
+
+            return settingsKeys;
+        }
+
+        private static IEnumerable<MediaFrameFormat> EnumerateWmfSupportedFormats(MediaCapture mediaCapture)
+        {
+            return mediaCapture.FrameSources
+                .Where(pair => pair.Value.Info.MediaStreamType is MediaStreamType.VideoPreview or MediaStreamType.VideoRecord)
+                .Select(pair => pair.Value)
+                .OrderBy(SourceRank)
+                .SelectMany(source => source.SupportedFormats);
+        }
+
+        private static string CreateVideoModeSettingsKey(uint width, uint height, double frameRate, string pixelFormat)
+        {
+            return $"{width}x{height}|{frameRate:0.###}|{NormalizePixelFormat(pixelFormat)}";
+        }
+
+        private static bool IsExcludedPreviewFormat(string pixelFormat)
+        {
+            return ExcludedPreviewPixelFormats.Contains(NormalizePixelFormat(pixelFormat));
+        }
+
+        private static List<VideoModeOption> DedupeAndSortVideoModes(IEnumerable<VideoModeOption> modes)
+        {
+            return modes
+                .GroupBy(mode => mode.SettingsKey, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderBy(mode => FormatRank(mode.PixelFormat)).First())
+                .OrderBy(mode => ResolutionCohortRank(mode.Width, mode.Height))
+                .ThenByDescending(mode => mode.Width)
+                .ThenByDescending(mode => mode.Height)
+                .ThenByDescending(mode => mode.FrameRate)
+                .ThenBy(mode => FormatRank(mode.PixelFormat))
+                .ToList();
         }
 
         private void BuildVideoModeMenu(IReadOnlyList<VideoModeOption> modes, VideoModeOption? selectedMode)
@@ -614,11 +693,16 @@ namespace Consolation
                         Text = frameRateGroup.Key
                     };
 
+                    VideoModeOption? defaultMode = ChooseBestFormat(frameRateGroup);
+
                     foreach (VideoModeOption mode in frameRateGroup.OrderBy(mode => FormatRank(mode.PixelFormat)))
                     {
+                        string formatLabel = NormalizePixelFormat(mode.PixelFormat);
                         ToggleMenuFlyoutItem formatItem = new()
                         {
-                            Text = NormalizePixelFormat(mode.PixelFormat),
+                            Text = defaultMode?.SettingsKey == mode.SettingsKey
+                                ? $"{formatLabel} (default)"
+                                : formatLabel,
                             Tag = mode,
                             IsChecked = selectedMode?.SettingsKey == mode.SettingsKey
                         };
@@ -688,13 +772,23 @@ namespace Consolation
 
         private OverlappedPresenter? GetOverlappedPresenter()
         {
+            return GetAppWindow()?.Presenter as OverlappedPresenter;
+        }
+
+        private AppWindow? GetAppWindow()
+        {
             IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
             WindowId windowId = Win32Interop.GetWindowIdFromWindow(windowHandle);
-            return AppWindow.GetFromWindowId(windowId)?.Presenter as OverlappedPresenter;
+            return AppWindow.GetFromWindowId(windowId);
         }
 
         private void ShowWindowChrome()
         {
+            if (_isFullScreen)
+            {
+                return;
+            }
+
             if (GetOverlappedPresenter() is OverlappedPresenter presenter)
             {
                 presenter.SetBorderAndTitleBar(true, true);
@@ -705,10 +799,197 @@ namespace Consolation
 
         private void HideWindowChrome()
         {
+            if (_isFullScreen)
+            {
+                return;
+            }
+
             if (GetOverlappedPresenter() is OverlappedPresenter presenter)
             {
                 presenter.SetBorderAndTitleBar(false, false);
             }
+        }
+
+        private void FullScreenButton_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleFullScreen();
+            ShowPlaybackControls(restartTimer: true);
+        }
+
+        private void RootGrid_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            if (e.Key == VirtualKey.Escape)
+            {
+                if (_isFullScreen)
+                {
+                    ExitFullScreen();
+                    e.Handled = true;
+                }
+
+                return;
+            }
+
+            if (e.Key == VirtualKey.F11 && _isPlaybackActive)
+            {
+                ToggleFullScreen();
+                ShowPlaybackControls(restartTimer: true);
+                e.Handled = true;
+            }
+        }
+
+        private void ToggleFullScreen()
+        {
+            if (_isFullScreen)
+            {
+                ExitFullScreen();
+            }
+            else
+            {
+                EnterFullScreen();
+            }
+        }
+
+        private void EnterFullScreen()
+        {
+            if (_isFullScreen)
+            {
+                return;
+            }
+
+            _isFullScreen = true;
+            GetAppWindow()?.SetPresenter(AppWindowPresenterKind.FullScreen);
+            UpdateFullScreenButton();
+        }
+
+        private void ExitFullScreen(bool restoreMaximized = true)
+        {
+            if (!_isFullScreen)
+            {
+                return;
+            }
+
+            _isFullScreen = false;
+            GetAppWindow()?.SetPresenter(AppWindowPresenterKind.Default);
+
+            if (restoreMaximized)
+            {
+                MaximizeWindow();
+            }
+
+            UpdateFullScreenButton();
+
+            if (PlaybackControlsBar.Visibility == Visibility.Visible)
+            {
+                ShowWindowChrome();
+            }
+            else
+            {
+                HideWindowChrome();
+            }
+        }
+
+        private void UpdateFullScreenButton()
+        {
+            FullScreenButtonIcon.Glyph = _isFullScreen ? "\uE73F" : "\uE740";
+            FullScreenButtonIcon.Foreground = _isFullScreen ? FullScreenActiveBrush : FullScreenInactiveBrush;
+        }
+
+        private void ResizeWindowToHalf_Click(object sender, RoutedEventArgs e) => ApplyPlaybackWindowResize(0.5);
+
+        private void ResizeWindowToSingle_Click(object sender, RoutedEventArgs e) => ApplyPlaybackWindowResize(1.0);
+
+        private void ResizeWindowToOneAndHalf_Click(object sender, RoutedEventArgs e) => ApplyPlaybackWindowResize(1.5);
+
+        private void ApplyPlaybackWindowResize(double scaleMultiplier)
+        {
+            if (!_isPlaybackActive || !TryGetActiveVideoDimensions(out uint videoWidth, out uint videoHeight))
+            {
+                return;
+            }
+
+            if (_isFullScreen)
+            {
+                ExitFullScreen(restoreMaximized: false);
+            }
+
+            AppWindow? appWindow = GetAppWindow();
+            if (appWindow is null)
+            {
+                return;
+            }
+
+            if (GetOverlappedPresenter() is OverlappedPresenter presenter)
+            {
+                if (presenter.State == OverlappedPresenterState.Maximized)
+                {
+                    presenter.Restore();
+                }
+
+                presenter.SetBorderAndTitleBar(false, false);
+            }
+
+            ExtendsContentIntoTitleBar = true;
+
+            IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            WindowId windowId = Win32Interop.GetWindowIdFromWindow(windowHandle);
+            DisplayArea displayArea = DisplayArea.GetFromWindowId(windowId, DisplayAreaFallback.Nearest);
+            RectInt32 workArea = displayArea.WorkArea;
+            double dpiScale = RootGrid.XamlRoot.RasterizationScale;
+
+            int targetWidth = (int)Math.Round(videoWidth * scaleMultiplier * dpiScale);
+            int targetHeight = (int)Math.Round(videoHeight * scaleMultiplier * dpiScale);
+
+            if (targetWidth > workArea.Width || targetHeight > workArea.Height)
+            {
+                double fitRatio = Math.Min(
+                    (double)workArea.Width / targetWidth,
+                    (double)workArea.Height / targetHeight);
+                targetWidth = Math.Max(1, (int)Math.Floor(targetWidth * fitRatio));
+                targetHeight = Math.Max(1, (int)Math.Floor(targetHeight * fitRatio));
+            }
+
+            int x = workArea.X + (workArea.Width - targetWidth) / 2;
+            int y = workArea.Y + (workArea.Height - targetHeight) / 2;
+
+            x = Math.Max(workArea.X, x);
+            y = Math.Max(workArea.Y, y);
+
+            if (x + targetWidth > workArea.X + workArea.Width)
+            {
+                x = workArea.X + workArea.Width - targetWidth;
+            }
+
+            if (y + targetHeight > workArea.Y + workArea.Height)
+            {
+                y = workArea.Y + workArea.Height - targetHeight;
+            }
+
+            x = Math.Max(workArea.X, x);
+            y = Math.Max(workArea.Y, y);
+
+            appWindow.MoveAndResize(new RectInt32(x, y, targetWidth, targetHeight));
+            ShowPlaybackControls(restartTimer: true);
+        }
+
+        private bool TryGetActiveVideoDimensions(out uint width, out uint height)
+        {
+            if (_activeVideoFormat?.VideoFormat is { Width: > 0, Height: > 0 } activeFormat)
+            {
+                width = activeFormat.Width;
+                height = activeFormat.Height;
+                return true;
+            }
+
+            if (_selectedVideoMode is { Width: > 0, Height: > 0 } selectedMode)
+            {
+                width = selectedMode.Width;
+                height = selectedMode.Height;
+                return true;
+            }
+
+            width = 0;
+            height = 0;
+            return false;
         }
 
         private async void PlayButton_Click(object sender, RoutedEventArgs e)
@@ -720,6 +1001,7 @@ namespace Consolation
 
             _isPlaybackActive = true;
             SuppressScreenSaver();
+            RootGrid.Focus(FocusState.Programmatic);
             StartupForm.Visibility = Visibility.Collapsed;
             PlaybackViewer.Visibility = Visibility.Visible;
             ConnectingOverlay.Visibility = Visibility.Visible;
@@ -1019,6 +1301,12 @@ namespace Consolation
             _activeVideoFormat = null;
             LowFpsWarningButton.Visibility = Visibility.Collapsed;
             VideoStatsOverlay.Visibility = Visibility.Collapsed;
+
+            if (_isFullScreen)
+            {
+                ExitFullScreen();
+            }
+
             ShowWindowChrome();
             RestoreScreenSaver();
             StopAudio();
@@ -1504,7 +1792,7 @@ namespace Consolation
                         TextWrapping = TextWrapping.Wrap
                     },
                     CreateDivider(),
-                    CreateInfoRow("\uE714", "Consolation is a USB Capture Card utility for viewing gaming consoles, Raspberry Pis, and other HDMI devices on a Windows PC.", iconOnly: true),
+                    CreateInfoRow("\uF7EE", "Consolation is a USB Capture Card utility for viewing gaming consoles, Raspberry Pis, and other HDMI devices on a Windows PC.", iconOnly: true),
                     CreateInfoRow("\uE7BA", "External USB Video Class (UVC) capture hardware is required.", iconOnly: true),
                     CreateInfoRow("\uEA18", "Consolation is 100% private. It does not collect analytics or snoop on your usage. Nothing ever leaves your device. Period.", iconOnly: true),
                     CreateInfoRow("\uEB51", "This software is completely free and open source for you to enjoy.", iconOnly: true),
@@ -2196,7 +2484,7 @@ namespace Consolation
             public required string PixelFormat { get; init; }
             public string ResolutionLabel => $"{Width} x {Height}";
             public string FrameRateLabel => $"{FrameRate:0.##} FPS";
-            public string SettingsKey => $"{Width}x{Height}|{FrameRate:0.###}|{NormalizePixelFormat(PixelFormat)}";
+            public string SettingsKey => CreateVideoModeSettingsKey(Width, Height, FrameRate, PixelFormat);
 
             public static VideoModeOption? FromProperties(VideoEncodingProperties properties)
             {

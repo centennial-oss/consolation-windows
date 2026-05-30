@@ -246,7 +246,7 @@
                                 Margin="6,0,0,0"
                                 FontSize="42"
                                 Foreground="White"
-                                Glyph="&#xE768;" />
+                                Glyph="&#xF5B0;" />
                         </Button>
                     </StackPanel>
                 </Border>
@@ -359,6 +359,36 @@
                         FontSize="18"
                         Foreground="White"
                         Glyph="&#xE8A3;" />
+
+                    <Rectangle
+                        Width="1"
+                        Height="28"
+                        Fill="#33FFFFFF" />
+
+                    <Button
+                        Style="{StaticResource RoundIconButtonStyle}"
+                        ToolTipService.ToolTip="Resize window">
+                        <Button.Flyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Click="ResizeWindowToHalf_Click" Text="Resize Window to 0.5x" />
+                                <MenuFlyoutItem Click="ResizeWindowToSingle_Click" Text="Resize Window to 1x" />
+                                <MenuFlyoutItem Click="ResizeWindowToOneAndHalf_Click" Text="Resize Window to 1.5x" />
+                            </MenuFlyout>
+                        </Button.Flyout>
+                        <FontIcon FontSize="17" Glyph="&#xE737;" />
+                    </Button>
+
+                    <Button
+                        x:Name="FullScreenButton"
+                        Click="FullScreenButton_Click"
+                        Style="{StaticResource RoundIconButtonStyle}"
+                        ToolTipService.ToolTip="Full screen">
+                        <FontIcon
+                            x:Name="FullScreenButtonIcon"
+                            FontSize="17"
+                            Foreground="White"
+                            Glyph="&#xE740;" />
+                    </Button>
 
                     <Rectangle
                         Width="1"

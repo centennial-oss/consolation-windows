@@ -56,20 +56,28 @@ jobs:
         uses: microsoft/microsoft-store-apppublisher@v1.1
 
       - name: Configure Microsoft Store Developer CLI
-        run: >
-          msstore reconfigure
-          --tenantId ${{ secrets.AZURE_AD_TENANT_ID }}
-          --sellerId ${{ secrets.SELLER_ID }}
-          --clientId ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
-          --clientSecret ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        shell: bash
+        env:
+          MSSTORE_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          MSSTORE_SELLER_ID: ${{ secrets.SELLER_ID }}
+          MSSTORE_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          MSSTORE_CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          msstore reconfigure \
+            --tenantId "$MSSTORE_TENANT_ID" \
+            --sellerId "$MSSTORE_SELLER_ID" \
+            --clientId "$MSSTORE_CLIENT_ID" \
+            --clientSecret "$MSSTORE_CLIENT_SECRET"
 
       # Create draft Partner Center submission
       - name: Upload draft submission to Partner Center
         shell: pwsh
+        env:
+          STORE_PRODUCT_ID: ${{ secrets.STORE_PRODUCT_ID }}
         run: >
           msstore publish "$env:GITHUB_WORKSPACE/Consolation"
           -i "$env:MSIX_UPLOAD"
-          -id ${{ secrets.STORE_PRODUCT_ID }}
+          -id "$env:STORE_PRODUCT_ID"
           --noCommit
           --verbose
 

@@ -81,6 +81,13 @@ namespace Consolation
             ["YVYU"] = "YVYU"
         };
 
+        private static readonly HashSet<string> ExcludedPreviewPixelFormats = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // MJPEG presents as black screen. WMF provides virtual NV12 option for MJPEG already decoded
+            "MJPEG",
+            "MJPG"
+        };
+
         private readonly DispatcherTimer _controlsHideTimer = new()
         {
             Interval = TimeSpan.FromSeconds(3)
@@ -315,23 +322,7 @@ namespace Consolation
                 probeCapture = new MediaCapture();
                 await probeCapture.InitializeAsync(CreateMediaCaptureSettings(device.Id, MediaCaptureSharingMode.SharedReadOnly));
 
-                IReadOnlyList<IMediaEncodingProperties> previewProperties =
-                    probeCapture.VideoDeviceController.GetAvailableMediaStreamProperties(MediaStreamType.VideoPreview);
-
-                List<VideoModeOption> videoModes = previewProperties
-                    .OfType<VideoEncodingProperties>()
-                    .Where(properties => properties.Width > 0 && properties.Height > 0 && properties.FrameRate.Denominator > 0)
-                    .Select(VideoModeOption.FromProperties)
-                    .Where(mode => mode is not null)
-                    .Select(mode => mode!)
-                    .GroupBy(mode => mode.SettingsKey, StringComparer.OrdinalIgnoreCase)
-                    .Select(group => group.OrderBy(mode => FormatRank(mode.PixelFormat)).First())
-                    .OrderBy(mode => ResolutionCohortRank(mode.Width, mode.Height))
-                    .ThenByDescending(mode => mode.Width)
-                    .ThenByDescending(mode => mode.Height)
-                    .ThenByDescending(mode => mode.FrameRate)
-                    .ThenBy(mode => FormatRank(mode.PixelFormat))
-                    .ToList();
+                List<VideoModeOption> videoModes = EnumeratePlayableVideoModes(probeCapture);
 
                 string? audioDeviceId = await FindPairedAudioDeviceIdAsync(device);
                 int deviceSelectionScore = ScoreCaptureCardLikelihood(device, audioDeviceId is not null, videoModes);
@@ -443,7 +434,7 @@ namespace Consolation
                 score += 16;
             }
 
-            if (videoModes.Any(mode => NormalizePixelFormat(mode.PixelFormat) is "MJPEG" or "YUY2" or "NV12"))
+            if (videoModes.Any(mode => NormalizePixelFormat(mode.PixelFormat) is "YUY2" or "NV12"))
             {
                 score += 6;
             }
@@ -571,13 +562,95 @@ namespace Consolation
             return normalized switch
             {
                 "NV12" => 0,
-                "YUY2" or "YUYV" => 1,
-                "UYVY" => 2,
-                "I420" or "IYUV" or "YV12" => 3,
+                "I420" or "IYUV" or "YV12" => 1,
+                "YUY2" or "YUYV" => 2,
+                "UYVY" => 3,
                 "RGB24" or "RGB32" or "ARGB32" or "BGRA8" => 4,
-                "MJPEG" or "MJPG" => 20,
                 _ => 10
             };
+        }
+
+        private static List<VideoModeOption> EnumeratePlayableVideoModes(MediaCapture mediaCapture)
+        {
+            HashSet<string> wmfSupportedSettingsKeys = BuildWmfSupportedSettingsKeys(mediaCapture);
+
+            IReadOnlyList<IMediaEncodingProperties> previewProperties =
+                mediaCapture.VideoDeviceController.GetAvailableMediaStreamProperties(MediaStreamType.VideoPreview);
+
+            return DedupeAndSortVideoModes(previewProperties
+                .OfType<VideoEncodingProperties>()
+                .Where(properties => properties.Width > 0 && properties.Height > 0 && properties.FrameRate.Denominator > 0)
+                .Select(VideoModeOption.FromProperties)
+                .Where(mode => mode is not null)
+                .Select(mode => mode!)
+                .Where(mode => mode.FrameRate > 0)
+                .Where(mode => !IsExcludedPreviewFormat(mode.PixelFormat))
+                .Where(mode => wmfSupportedSettingsKeys.Contains(mode.SettingsKey)));
+        }
+
+        private static HashSet<string> BuildWmfSupportedSettingsKeys(MediaCapture mediaCapture)
+        {
+            HashSet<string> settingsKeys = new(StringComparer.OrdinalIgnoreCase);
+
+            foreach (MediaFrameFormat format in EnumerateWmfSupportedFormats(mediaCapture))
+            {
+                if (format.VideoFormat is null)
+                {
+                    continue;
+                }
+
+                string? pixelFormat = TryRecognizePixelFormat(format.Subtype);
+                if (pixelFormat is null || IsExcludedPreviewFormat(pixelFormat))
+                {
+                    continue;
+                }
+
+                double frameRate = GetFrameRate(format);
+                if (frameRate <= 0)
+                {
+                    continue;
+                }
+
+                settingsKeys.Add(CreateVideoModeSettingsKey(
+                    format.VideoFormat.Width,
+                    format.VideoFormat.Height,
+                    frameRate,
+                    pixelFormat));
+            }
+
+            return settingsKeys;
+        }
+
+        private static IEnumerable<MediaFrameFormat> EnumerateWmfSupportedFormats(MediaCapture mediaCapture)
+        {
+            return mediaCapture.FrameSources
+                .Where(pair => pair.Value.Info.MediaStreamType is MediaStreamType.VideoPreview or MediaStreamType.VideoRecord)
+                .Select(pair => pair.Value)
+                .OrderBy(SourceRank)
+                .SelectMany(source => source.SupportedFormats);
+        }
+
+        private static string CreateVideoModeSettingsKey(uint width, uint height, double frameRate, string pixelFormat)
+        {
+            return $"{width}x{height}|{frameRate:0.###}|{NormalizePixelFormat(pixelFormat)}";
+        }
+
+        private static bool IsExcludedPreviewFormat(string pixelFormat)
+        {
+            return ExcludedPreviewPixelFormats.Contains(NormalizePixelFormat(pixelFormat));
+        }
+
+        private static List<VideoModeOption> DedupeAndSortVideoModes(IEnumerable<VideoModeOption> modes)
+        {
+            return modes
+                .GroupBy(mode => mode.SettingsKey, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderBy(mode => FormatRank(mode.PixelFormat)).First())
+                .OrderBy(mode => ResolutionCohortRank(mode.Width, mode.Height))
+                .ThenByDescending(mode => mode.Width)
+                .ThenByDescending(mode => mode.Height)
+                .ThenByDescending(mode => mode.FrameRate)
+                .ThenBy(mode => FormatRank(mode.PixelFormat))
+                .ToList();
         }
 
         private void BuildVideoModeMenu(IReadOnlyList<VideoModeOption> modes, VideoModeOption? selectedMode)
@@ -614,11 +687,16 @@ namespace Consolation
                         Text = frameRateGroup.Key
                     };
 
+                    VideoModeOption? defaultMode = ChooseBestFormat(frameRateGroup);
+
                     foreach (VideoModeOption mode in frameRateGroup.OrderBy(mode => FormatRank(mode.PixelFormat)))
                     {
+                        string formatLabel = NormalizePixelFormat(mode.PixelFormat);
                         ToggleMenuFlyoutItem formatItem = new()
                         {
-                            Text = NormalizePixelFormat(mode.PixelFormat),
+                            Text = defaultMode?.SettingsKey == mode.SettingsKey
+                                ? $"{formatLabel} (default)"
+                                : formatLabel,
                             Tag = mode,
                             IsChecked = selectedMode?.SettingsKey == mode.SettingsKey
                         };
@@ -2163,7 +2241,7 @@ namespace Consolation
             public required string PixelFormat { get; init; }
             public string ResolutionLabel => $"{Width} x {Height}";
             public string FrameRateLabel => $"{FrameRate:0.##} FPS";
-            public string SettingsKey => $"{Width}x{Height}|{FrameRate:0.###}|{NormalizePixelFormat(PixelFormat)}";
+            public string SettingsKey => CreateVideoModeSettingsKey(Width, Height, FrameRate, PixelFormat);
 
             public static VideoModeOption? FromProperties(VideoEncodingProperties properties)
             {

@@ -43,9 +43,12 @@ foreach ($arch in $architectures) {
         throw "Expected app package not found: $packagePath"
     }
 
+    $archOutputDir = Join-Path $outputDir $arch.Arch
+    New-Item -ItemType Directory -Path $archOutputDir -Force | Out-Null
+
     $uploadName = "Consolation_${msixVersion}_$($arch.Arch).msixupload"
     $uploadZip = Join-Path $env:RUNNER_TEMP "$uploadName.zip"
-    $uploadPath = Join-Path $outputDir $uploadName
+    $uploadPath = Join-Path $archOutputDir $uploadName
 
     if (Test-Path $uploadZip) { Remove-Item $uploadZip -Force }
     if (Test-Path $uploadPath) { Remove-Item $uploadPath -Force }

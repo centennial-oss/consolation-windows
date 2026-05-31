@@ -23,12 +23,24 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: msixupload
+          path: msix-packages
 
-      - name: Set MSIX upload path
-        shell: bash
+      - name: Set MSIX input directory
+        shell: pwsh
         run: |
-          upload="${GITHUB_WORKSPACE}/${{ inputs.msix_upload_filename }}"
-          echo "MSIX_UPLOAD=$upload" >> "$GITHUB_ENV"
+          $ErrorActionPreference = 'Stop'
+          $expected = '${{ inputs.msix_upload_filename }}'
+          $file = Get-ChildItem -Path msix-packages -Recurse -File |
+            Where-Object { $_.Name -eq $expected } |
+            Select-Object -First 1
+          if (-not $file) {
+            Write-Host 'Contents of msix-packages:'
+            Get-ChildItem -Path msix-packages -Recurse | ForEach-Object { Write-Host "  $($_.FullName)" }
+            throw "Could not find $expected under msix-packages"
+          }
+          Write-Host "Using package: $($file.FullName)"
+          # msstore -i expects the directory containing the .msixupload file, not the file path
+          "MSIX_INPUT_DIR=$($file.Directory.FullName)" >> $env:GITHUB_ENV
 
       # Configure MS Partner Center credentials
       - name: Setup Microsoft Store Developer CLI
@@ -69,7 +81,7 @@ jobs:
           STORE_PRODUCT_ID: ${{ secrets.STORE_PRODUCT_ID }}
         run: >
           msstore publish "$env:GITHUB_WORKSPACE/Consolation"
-          -i "$env:MSIX_UPLOAD"
+          -i "$env:MSIX_INPUT_DIR"
           -id "$env:STORE_PRODUCT_ID"
           --noCommit
           --verbose

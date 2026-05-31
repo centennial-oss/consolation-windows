@@ -19,6 +19,7 @@ jobs:
     uses: ./.github/workflows/build-windows-installer.yml
     with:
       release_version: ${{ inputs.release_version }}
+      upload_artifact: true
 
   submit-to-store:
     needs: build-windows-installer

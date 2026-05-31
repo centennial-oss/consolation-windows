@@ -7,6 +7,11 @@ on:
         required: true
         type: string
         description: Version string used in the .msixupload filename (e.g. 0.0.1 or 1.2.3)
+      upload_artifact:
+        required: false
+        type: boolean
+        default: false
+        description: Upload the .msixupload as a workflow artifact for downstream jobs
     outputs:
       msix_upload_filename:
         description: Filename of the bundled .msixupload artifact
@@ -56,6 +61,7 @@ jobs:
           "MSIX_UPLOAD=$upload" >> $env:GITHUB_ENV
 
       - name: Upload .msixupload artifact
+        if: inputs.upload_artifact
         uses: actions/upload-artifact@v7
         with:
           name: msixupload

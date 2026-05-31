@@ -13,16 +13,16 @@ on:
         default: false
         description: Upload the .msixupload as a workflow artifact for downstream jobs
     outputs:
-      msix_upload_filename:
-        description: Filename of the bundled .msixupload artifact
-        value: ${{ jobs.build.outputs.msix_upload_filename }}
+      msix_packages_dir:
+        description: Directory containing per-architecture .msixupload files for Store submission
+        value: ${{ jobs.build.outputs.msix_packages_dir }}
 
 jobs:
   build:
     name: Build Windows Installer Artifact
     runs-on: windows-latest
     outputs:
-      msix_upload_filename: ${{ steps.package.outputs.msix_upload_filename }}
+      msix_packages_dir: ${{ steps.package.outputs.msix_packages_dir }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v6
@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: make build-release
 
-      # Bundle x86/x64/arm64 .msix packages into a Store-ready .msixupload (MakeAppx + zip)
+      # Create per-architecture .msixupload files for Partner Center
       - name: Bundle packages into .msixupload
         id: package
         shell: pwsh
@@ -54,5 +54,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: msixupload
-          path: ${{ steps.package.outputs.msix_upload }}
+          path: store-packages/
           if-no-files-found: error

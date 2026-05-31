@@ -36,8 +36,6 @@ jobs:
   submit-to-store:
     needs: build-windows-installer
     uses: ./.github/workflows/submit-to-store.yml
-    with:
-      msix_upload_filename: ${{ needs.build-windows-installer.outputs.msix_upload_filename }}
     secrets: inherit
 
   draft-release:

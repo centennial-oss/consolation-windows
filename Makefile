@@ -13,14 +13,17 @@ GIT_COMMIT := $(shell powershell -NoProfile -Command "if (Get-Command git -Error
 DOTNET := dotnet
 MSBUILD_RELEASE_PROPS := -c Release -p:AppxPackageSigningEnabled=false -p:GenerateAppxPackageOnBuild=true -p:AppxBundle=Never -p:AppxPackageVersion=$(MSIX_VERSION)
 
-.PHONY: build build-debug build-release build-release-amd64 build-release-arm64 set-release-version-info clear-version-info
+.PHONY: build build-debug build-release build-release-x86 build-release-amd64 build-release-arm64 set-release-version-info clear-version-info
 
 build: build-debug
 
 build-debug:
 	$(DOTNET) build $(PROJECT) -c Debug
 
-build-release: set-release-version-info build-release-amd64 build-release-arm64 clear-version-info
+build-release: set-release-version-info build-release-x86 build-release-amd64 build-release-arm64 clear-version-info
+
+build-release-x86:
+	$(DOTNET) publish $(PROJECT) $(MSBUILD_RELEASE_PROPS) -p:Platform=x86 -r win-x86
 
 build-release-amd64:
 	$(DOTNET) publish $(PROJECT) $(MSBUILD_RELEASE_PROPS) -p:Platform=x64 -r win-x64

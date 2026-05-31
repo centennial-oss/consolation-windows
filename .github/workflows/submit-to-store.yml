@@ -41,6 +41,10 @@ jobs:
           Write-Host "Using package: $($file.FullName)"
           # msstore -i expects the directory containing the .msixupload file, not the file path
           "MSIX_INPUT_DIR=$($file.Directory.FullName)" >> $env:GITHUB_ENV
+          Write-Host 'Package inputs for msstore publish:'
+          Get-ChildItem -Path $file.Directory.FullName -File | ForEach-Object {
+            Write-Host "  $($_.Name) ($([math]::Round($_.Length / 1MB, 2)) MB)"
+          }
 
       # Configure MS Partner Center credentials
       - name: Setup Microsoft Store Developer CLI
@@ -79,9 +83,17 @@ jobs:
         shell: pwsh
         env:
           STORE_PRODUCT_ID: ${{ secrets.STORE_PRODUCT_ID }}
-        run: >
-          msstore publish "$env:GITHUB_WORKSPACE/Consolation"
-          -i "$env:MSIX_INPUT_DIR"
-          -id "$env:STORE_PRODUCT_ID"
-          --noCommit
-          --verbose
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $uploads = Get-ChildItem -Path $env:MSIX_INPUT_DIR -File |
+            Where-Object { $_.Extension -in '.msix', '.msixupload', '.msixbundle' }
+          if (-not $uploads) {
+            throw "No .msix/.msixupload/.msixbundle files in $env:MSIX_INPUT_DIR"
+          }
+          Write-Host "Publishing $($uploads.Count) package file(s) from $env:MSIX_INPUT_DIR"
+          msstore publish "$env:GITHUB_WORKSPACE/Consolation" `
+            -i "$env:MSIX_INPUT_DIR" `
+            -id "$env:STORE_PRODUCT_ID" `
+            --noCommit `
+            --verbose
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

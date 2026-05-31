@@ -22,7 +22,7 @@ jobs:
     name: Build Windows Installer Artifact
     runs-on: windows-latest
     outputs:
-      msix_upload_filename: Consolation_${{ inputs.release_version }}.msixupload
+      msix_upload_filename: ${{ steps.package.outputs.msix_upload_filename }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v6
@@ -43,27 +43,16 @@ jobs:
         shell: bash
         run: make build-release
 
-      # Bundle x86_64 and arm64 .msix packages into a single .msixupload
+      # Bundle x86/x64/arm64 .msix packages into a Store-ready .msixupload (MakeAppx + zip)
       - name: Bundle packages into .msixupload
+        id: package
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $packages = Get-ChildItem -Path . -Recurse -Filter *.msix |
-            Where-Object { $_.FullName -notmatch '[\\/](obj|intermediates)[\\/]' }
-          if (-not $packages) {
-            throw 'No .msix packages were produced by the build.'
-          }
-          Write-Host "Found $($packages.Count) package(s):"
-          $packages.FullName | ForEach-Object { Write-Host "  $_" }
-          $upload = Join-Path $env:GITHUB_WORKSPACE "Consolation_$($env:RELEASE_VERSION).msixupload"
-          if (Test-Path $upload) { Remove-Item $upload }
-          Compress-Archive -Path $packages.FullName -DestinationPath $upload
-          "MSIX_UPLOAD=$upload" >> $env:GITHUB_ENV
+        run: ./scripts/New-MsixUpload.ps1 -ReleaseVersion $env:RELEASE_VERSION -WorkspaceRoot $env:GITHUB_WORKSPACE
 
       - name: Upload .msixupload artifact
         if: inputs.upload_artifact
         uses: actions/upload-artifact@v7
         with:
           name: msixupload
-          path: Consolation_${{ inputs.release_version }}.msixupload
+          path: ${{ steps.package.outputs.msix_upload }}
           if-no-files-found: error

@@ -1,0 +1,75 @@
+name: Submit to Microsoft Store
+
+on:
+  workflow_call:
+    inputs:
+      msix_upload_filename:
+        required: true
+        type: string
+        description: Basename of the .msixupload file produced by the build workflow
+
+jobs:
+  submit:
+    name: Upload draft submission to Partner Center
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Download .msixupload artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: msixupload
+
+      - name: Set MSIX upload path
+        shell: bash
+        run: |
+          upload="${GITHUB_WORKSPACE}/${{ inputs.msix_upload_filename }}"
+          echo "MSIX_UPLOAD=$upload" >> "$GITHUB_ENV"
+
+      # Configure MS Partner Center credentials
+      - name: Setup Microsoft Store Developer CLI
+        uses: microsoft/microsoft-store-apppublisher@v1.3
+
+      - name: Configure Microsoft Store Developer CLI
+        shell: bash
+        env:
+          MSSTORE_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          MSSTORE_SELLER_ID: ${{ secrets.SELLER_ID }}
+          MSSTORE_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          MSSTORE_CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          # Strip any stray whitespace/newlines that may have been pasted into the
+          # secrets (a trailing newline alone breaks the seller-id integer parse).
+          MSSTORE_SELLER_ID="$(printf '%s' "$MSSTORE_SELLER_ID" | tr -d '[:space:]')"
+          MSSTORE_TENANT_ID="$(printf '%s' "$MSSTORE_TENANT_ID" | tr -d '[:space:]')"
+          MSSTORE_CLIENT_ID="$(printf '%s' "$MSSTORE_CLIENT_ID" | tr -d '[:space:]')"
+
+          # The CLI parses the seller id as an integer. Fail early with a clear message
+          # (never echoing the value) if it is not purely numeric, e.g. if the Publisher
+          # ID (a GUID) was stored in the SELLER_ID secret by mistake.
+          if ! [[ "$MSSTORE_SELLER_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::SELLER_ID secret must be the numeric Partner Center Seller ID (digits only), not the Publisher ID GUID or any other value." >&2
+            exit 1
+          fi
+
+          msstore reconfigure \
+            --tenantId "$MSSTORE_TENANT_ID" \
+            --sellerId "$MSSTORE_SELLER_ID" \
+            --clientId "$MSSTORE_CLIENT_ID" \
+            --clientSecret "$MSSTORE_CLIENT_SECRET"
+
+      # Create draft Partner Center submission
+      - name: Upload draft submission to Partner Center
+        shell: pwsh
+        env:
+          STORE_PRODUCT_ID: ${{ secrets.STORE_PRODUCT_ID }}
+        run: >
+          msstore publish "$env:GITHUB_WORKSPACE/Consolation"
+          -i "$env:MSIX_UPLOAD"
+          -id "$env:STORE_PRODUCT_ID"
+          --noCommit
+          --verbose

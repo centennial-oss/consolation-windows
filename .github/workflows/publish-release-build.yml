@@ -6,99 +6,43 @@ on:
       # Semantic version tags: v1.0.0, v2.1.3, etc.
       - 'v*.*.*'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 jobs:
+  resolve-version:
+    name: Resolve release version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.version.outputs.release_version }}
+    steps:
+      - name: Strip v prefix from tag
+        id: version
+        shell: bash
+        run: echo "release_version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
   build-windows-installer:
     name: Build Windows Installer Artifact
-    runs-on: windows-latest
+    needs: resolve-version
+    uses: ./.github/workflows/build-windows-installer.yml
+    with:
+      release_version: ${{ needs.resolve-version.outputs.release_version }}
 
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Set release version
-        shell: bash
-        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_ENV"
-
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '8.0.x'
-
-      # Build the release MSIX packages unsigned
-      - name: Build release MSIX packages
-        shell: bash
-        run: make build-release
-
-      # Bundle x86_64 and arm64 .msix packages into a single .msixupload
-      - name: Bundle packages into .msixupload
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $packages = Get-ChildItem -Path . -Recurse -Filter *.msix |
-            Where-Object { $_.FullName -notmatch '[\\/](obj|intermediates)[\\/]' }
-          if (-not $packages) {
-            throw 'No .msix packages were produced by the build.'
-          }
-          Write-Host "Found $($packages.Count) package(s):"
-          $packages.FullName | ForEach-Object { Write-Host "  $_" }
-          $upload = Join-Path $env:GITHUB_WORKSPACE "Consolation_$($env:RELEASE_VERSION).msixupload"
-          if (Test-Path $upload) { Remove-Item $upload }
-          Compress-Archive -Path $packages.FullName -DestinationPath $upload
-          "MSIX_UPLOAD=$upload" >> $env:GITHUB_ENV
-
-      # Configure MS Partner Center credentials
-      - name: Setup Microsoft Store Developer CLI
-        uses: microsoft/microsoft-store-apppublisher@v1.3
-
-      - name: Configure Microsoft Store Developer CLI
-        shell: bash
-        env:
-          MSSTORE_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
-          MSSTORE_SELLER_ID: ${{ secrets.SELLER_ID }}
-          MSSTORE_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
-          MSSTORE_CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
-        run: |
-          # Strip any stray whitespace/newlines that may have been pasted into the
-          # secrets (a trailing newline alone breaks the seller-id integer parse).
-          MSSTORE_SELLER_ID="$(printf '%s' "$MSSTORE_SELLER_ID" | tr -d '[:space:]')"
-          MSSTORE_TENANT_ID="$(printf '%s' "$MSSTORE_TENANT_ID" | tr -d '[:space:]')"
-          MSSTORE_CLIENT_ID="$(printf '%s' "$MSSTORE_CLIENT_ID" | tr -d '[:space:]')"
-
-          # The CLI parses the seller id as an integer. Fail early with a clear message
-          # (never echoing the value) if it is not purely numeric, e.g. if the Publisher
-          # ID (a GUID) was stored in the SELLER_ID secret by mistake.
-          if ! [[ "$MSSTORE_SELLER_ID" =~ ^[0-9]+$ ]]; then
-            echo "::error::SELLER_ID secret must be the numeric Partner Center Seller ID (digits only), not the Publisher ID GUID or any other value." >&2
-            exit 1
-          fi
-
-          msstore reconfigure \
-            --tenantId "$MSSTORE_TENANT_ID" \
-            --sellerId "$MSSTORE_SELLER_ID" \
-            --clientId "$MSSTORE_CLIENT_ID" \
-            --clientSecret "$MSSTORE_CLIENT_SECRET"
-
-      # Create draft Partner Center submission
-      - name: Upload draft submission to Partner Center
-        shell: pwsh
-        env:
-          STORE_PRODUCT_ID: ${{ secrets.STORE_PRODUCT_ID }}
-        run: >
-          msstore publish "$env:GITHUB_WORKSPACE/Consolation"
-          -i "$env:MSIX_UPLOAD"
-          -id "$env:STORE_PRODUCT_ID"
-          --noCommit
-          --verbose
+  submit-to-store:
+    needs: build-windows-installer
+    uses: ./.github/workflows/submit-to-store.yml
+    with:
+      msix_upload_filename: ${{ needs.build-windows-installer.outputs.msix_upload_filename }}
+    secrets: inherit
 
   draft-release:
     name: Create draft release
     runs-on: ubuntu-latest
-    needs: build-windows-installer
+    needs: [build-windows-installer, submit-to-store]
 
     steps:
       # Note: no `files:` are attached / no local code signing

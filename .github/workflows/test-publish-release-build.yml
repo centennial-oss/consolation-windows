@@ -1,0 +1,28 @@
+name: Test Build + Submit Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version without v prefix (e.g. 0.0.1 or 1.2.3)'
+        required: true
+        type: string
+        default: '0.0.1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows-installer:
+    name: Build Windows Installer Artifact
+    uses: ./.github/workflows/build-windows-installer.yml
+    with:
+      release_version: ${{ inputs.release_version }}
+
+  submit-to-store:
+    needs: build-windows-installer
+    uses: ./.github/workflows/submit-to-store.yml
+    with:
+      msix_upload_filename: ${{ needs.build-windows-installer.outputs.msix_upload_filename }}
+    secrets: inherit

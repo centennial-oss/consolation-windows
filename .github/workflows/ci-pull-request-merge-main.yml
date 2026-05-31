@@ -1,0 +1,19 @@
+name: CI / Pull Request & Merge to Main
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-installer:
+    uses: ./.github/workflows/build-windows-installer.yml
+    with:
+      release_version: '0.0.1'

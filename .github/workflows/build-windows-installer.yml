@@ -1,0 +1,63 @@
+name: Build Windows Installer
+
+on:
+  workflow_call:
+    inputs:
+      release_version:
+        required: true
+        type: string
+        description: Version string used in the .msixupload filename (e.g. 0.0.1 or 1.2.3)
+    outputs:
+      msix_upload_filename:
+        description: Filename of the bundled .msixupload artifact
+        value: ${{ jobs.build.outputs.msix_upload_filename }}
+
+jobs:
+  build:
+    name: Build Windows Installer Artifact
+    runs-on: windows-latest
+    outputs:
+      msix_upload_filename: Consolation_${{ inputs.release_version }}.msixupload
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set release version
+        shell: bash
+        run: echo "RELEASE_VERSION=${{ inputs.release_version }}" >> "$GITHUB_ENV"
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      # Build the release MSIX packages unsigned
+      - name: Build release MSIX packages
+        shell: bash
+        run: make build-release
+
+      # Bundle x86_64 and arm64 .msix packages into a single .msixupload
+      - name: Bundle packages into .msixupload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packages = Get-ChildItem -Path . -Recurse -Filter *.msix |
+            Where-Object { $_.FullName -notmatch '[\\/](obj|intermediates)[\\/]' }
+          if (-not $packages) {
+            throw 'No .msix packages were produced by the build.'
+          }
+          Write-Host "Found $($packages.Count) package(s):"
+          $packages.FullName | ForEach-Object { Write-Host "  $_" }
+          $upload = Join-Path $env:GITHUB_WORKSPACE "Consolation_$($env:RELEASE_VERSION).msixupload"
+          if (Test-Path $upload) { Remove-Item $upload }
+          Compress-Archive -Path $packages.FullName -DestinationPath $upload
+          "MSIX_UPLOAD=$upload" >> $env:GITHUB_ENV
+
+      - name: Upload .msixupload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: msixupload
+          path: Consolation_${{ inputs.release_version }}.msixupload
+          if-no-files-found: error

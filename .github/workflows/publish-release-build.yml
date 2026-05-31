@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -25,7 +25,7 @@ jobs:
         run: echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_ENV"
 
       - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
 
@@ -53,7 +53,7 @@ jobs:
 
       # Configure MS Partner Center credentials
       - name: Setup Microsoft Store Developer CLI
-        uses: microsoft/microsoft-store-apppublisher@v1.1
+        uses: microsoft/microsoft-store-apppublisher@v1.3
 
       - name: Configure Microsoft Store Developer CLI
         shell: bash
@@ -63,6 +63,20 @@ jobs:
           MSSTORE_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
           MSSTORE_CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
         run: |
+          # Strip any stray whitespace/newlines that may have been pasted into the
+          # secrets (a trailing newline alone breaks the seller-id integer parse).
+          MSSTORE_SELLER_ID="$(printf '%s' "$MSSTORE_SELLER_ID" | tr -d '[:space:]')"
+          MSSTORE_TENANT_ID="$(printf '%s' "$MSSTORE_TENANT_ID" | tr -d '[:space:]')"
+          MSSTORE_CLIENT_ID="$(printf '%s' "$MSSTORE_CLIENT_ID" | tr -d '[:space:]')"
+
+          # The CLI parses the seller id as an integer. Fail early with a clear message
+          # (never echoing the value) if it is not purely numeric, e.g. if the Publisher
+          # ID (a GUID) was stored in the SELLER_ID secret by mistake.
+          if ! [[ "$MSSTORE_SELLER_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::SELLER_ID secret must be the numeric Partner Center Seller ID (digits only), not the Publisher ID GUID or any other value." >&2
+            exit 1
+          fi
+
           msstore reconfigure \
             --tenantId "$MSSTORE_TENANT_ID" \
             --sellerId "$MSSTORE_SELLER_ID" \
@@ -89,7 +103,7 @@ jobs:
     steps:
       # Note: no `files:` are attached / no local code signing
       - name: Create draft GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: Consolation ${{ github.ref_name }}

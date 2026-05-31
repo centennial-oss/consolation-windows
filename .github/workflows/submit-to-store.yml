@@ -35,6 +35,7 @@ jobs:
           Write-Host "Store packages to publish ($($uploads.Count)):"
           $uploads | ForEach-Object { Write-Host "  $($_.Name) ($([math]::Round($_.Length / 1MB, 2)) MB)" }
           "MSIX_PACKAGES_DIR=$packagesDir" >> $env:GITHUB_ENV
+          "CONSOLATION_PROJECT_DIR=$(Join-Path $env:GITHUB_WORKSPACE 'Consolation')" >> $env:GITHUB_ENV
 
       # Configure MS Partner Center credentials
       - name: Setup Microsoft Store Developer CLI
@@ -68,17 +69,18 @@ jobs:
             --clientId "$MSSTORE_CLIENT_ID" \
             --clientSecret "$MSSTORE_CLIENT_SECRET"
 
-      # Pass the package directory as the positional argument (not -i). Using the
-      # project path with -i caused "Trying to publish these 0 files" — see
-      # https://github.com/microsoft/microsoft-store-apppublisher/issues/171
+      # pathOrUrl must be the WinUI project; -i points at the built .msixupload files.
+      # Passing only the packages dir as pathOrUrl fails with "no project publisher".
       - name: Upload draft submission to Partner Center
         shell: pwsh
         env:
           STORE_PRODUCT_ID: ${{ secrets.STORE_PRODUCT_ID }}
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host "Publishing from $env:MSIX_PACKAGES_DIR"
-          msstore publish "$env:MSIX_PACKAGES_DIR" `
+          Write-Host "Project: $env:CONSOLATION_PROJECT_DIR"
+          Write-Host "Packages: $env:MSIX_PACKAGES_DIR"
+          msstore publish "$env:CONSOLATION_PROJECT_DIR" `
+            -i "$env:MSIX_PACKAGES_DIR" `
             -id "$env:STORE_PRODUCT_ID" `
             --noCommit `
             --verbose
